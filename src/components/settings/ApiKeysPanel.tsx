@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Switch } from '@/components/ui/switch'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { EmptyState } from '@/components/ui/empty-state'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -59,6 +60,7 @@ interface ApiKey {
   scopes: string[] | null
   rate_limit_rpm: number
   mode?: 'live' | 'test'
+  mcp_only?: boolean
   last_used_at: string | null
   revoked_at: string | null
   created_at: string
@@ -119,10 +121,12 @@ function ScopeCard({
   scope,
   checked,
   onCheckedChange,
+  disabled = false,
 }: {
   scope: Scope
   checked: boolean
   onCheckedChange: (checked: boolean) => void
+  disabled?: boolean
 }) {
   const t = useTranslations('settings_api_keys')
   const label = t(scopeLabelKey(scope))
@@ -134,16 +138,19 @@ function ScopeCard({
   return (
     <label
       className={cn(
-        'flex min-h-[68px] cursor-pointer flex-col gap-1 rounded-lg border p-2 transition-colors',
-        checked
-          ? 'border-border bg-secondary'
-          : 'border-border hover:bg-secondary/60'
+        'flex min-h-[68px] flex-col gap-1 rounded-lg border p-2 transition-colors',
+        disabled
+          ? 'cursor-not-allowed border-border opacity-50'
+          : checked
+            ? 'cursor-pointer border-border bg-secondary'
+            : 'cursor-pointer border-border hover:bg-secondary/60'
       )}
     >
       <div className="flex items-center gap-2">
         <Checkbox
           checked={checked}
           onCheckedChange={onCheckedChange}
+          disabled={disabled}
           className="shrink-0"
         />
         <span className="flex-1 text-xs font-medium text-foreground">{verb}</span>
@@ -180,6 +187,9 @@ export function ApiKeysPanel() {
   // simulation-only key that forces dry-run on every write (nothing is saved).
   const [newKeyMode, setNewKeyMode] = useState<'live' | 'test'>('live')
   const [newKeyScopes, setNewKeyScopes] = useState<Set<Scope>>(new Set(ALL_SCOPES))
+  // MCP-only: the key is refused by REST and every other bearer surface, so
+  // its writes can only arrive as staged operations awaiting approval.
+  const [newKeyMcpOnly, setNewKeyMcpOnly] = useState(false)
   const [newKeyValue, setNewKeyValue] = useState('')
 
   // Segregation-of-duties: a single key that both stages bookkeeping (any
@@ -208,6 +218,22 @@ export function ApiKeysPanel() {
       }
       return next
     })
+  }
+
+  // Turning MCP-only on drops pending_operations:approve and locks it: a
+  // proposal-only key that can approve its own proposals is the one
+  // combination the flag exists to rule out. It is impossible, not merely
+  // warned about: the route answers VALIDATION_ERROR (mcp_only_cannot_approve)
+  // and the api_keys_mcp_only_no_approve CHECK refuses it in storage.
+  function toggleMcpOnly(checked: boolean) {
+    setNewKeyMcpOnly(checked)
+    if (checked) {
+      setNewKeyScopes((prev) => {
+        const next = new Set(prev)
+        next.delete('pending_operations:approve')
+        return next
+      })
+    }
   }
 
   const fetchKeys = useCallback(async () => {
@@ -250,6 +276,7 @@ export function ApiKeysPanel() {
           name: newKeyName || t('default_key_name'),
           scopes: Array.from(newKeyScopes),
           mode: newKeyMode,
+          mcp_only: newKeyMcpOnly,
           ...(hasSodConflict ? { acknowledge_sod: true } : {}),
         }),
       })
@@ -272,6 +299,7 @@ export function ApiKeysPanel() {
       setShowKeyDialog(true)
       setNewKeyName('')
       setNewKeyMode('live')
+      setNewKeyMcpOnly(false)
       setNewKeyScopes(new Set(ALL_SCOPES))
       fetchKeys()
     } catch {
@@ -582,6 +610,11 @@ export function ApiKeysPanel() {
                         {t('badge_test')}
                       </Badge>
                     )}
+                    {key.mcp_only && (
+                      <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[10px] font-normal">
+                        {t('mcp_only_badge')}
+                      </Badge>
+                    )}
                   </span>
                   <span className="min-w-0 truncate text-xs text-muted-foreground">
                     {permissionSummary}
@@ -656,6 +689,17 @@ export function ApiKeysPanel() {
                 {newKeyMode === 'test' ? t('mode_test_help') : t('mode_live_help')}
               </p>
             </div>
+            <div className="space-y-1">
+              <div className="flex items-center gap-3">
+                <Switch
+                  id="key-mcp-only"
+                  checked={newKeyMcpOnly}
+                  onCheckedChange={toggleMcpOnly}
+                />
+                <Label htmlFor="key-mcp-only" className="cursor-pointer">{t('mcp_only_label')}</Label>
+              </div>
+              <p className="max-w-prose text-xs text-muted-foreground">{t('mcp_only_help')}</p>
+            </div>
             <div className="space-y-3">
               <div className="flex items-baseline justify-between gap-3">
                 <div className="space-y-1">
@@ -683,6 +727,7 @@ export function ApiKeysPanel() {
                           scope={scope}
                           checked={newKeyScopes.has(scope)}
                           onCheckedChange={(checked) => toggleScope(group, scope, checked)}
+                          disabled={newKeyMcpOnly && scope === 'pending_operations:approve'}
                         />
                       ))}
                     </div>

@@ -31,6 +31,11 @@ export const API_KEY_SCOPES = {
   'webhooks:manage':    { label: 'Webhooks: hantera',   description: 'Skapa, lista, uppdatera och radera webhook-prenumerationer' },
   'operations:read':    { label: 'Operationer: läs',    description: 'Hämta status för långkörande operationer (importer, bokslut, omvärdering)' },
   'documents:read':     { label: 'Dokument: läs',       description: 'Lista och hämta dokumentbilagor' },
+  // Upload only: POST /documents without journal_entry_id/line_id. The
+  // document lands unlinked, is read and classified, and a receipt or invoice
+  // is queued in Underlag for matching; nothing is attached to a verifikat.
+  // documents:write implies it (hasScope in api-keys.ts).
+  'documents:upload':   { label: 'Dokument: ladda upp', description: 'Lämna underlag via REST utan att koppla dem till verifikat; kvitton och fakturor hamnar i Underlag för matchning' },
   'documents:write':    { label: 'Dokument: skriv',     description: 'Ladda upp och koppla dokument till verifikationer' },
   'compliance:read':    { label: 'Compliance: läs',     description: 'Pre-flight-kontroller: momsstängning, bokslutsberedskap, voucher-gap, IB/UB-kontinuitet; Skatteverket-status (moms + AGI)' },
   'skatteverket:write': { label: 'Skatteverket: skriv', description: 'Lämna momsdeklaration och arbetsgivardeklaration (AGI) till Skatteverket (stagas; signeras med BankID)' },
@@ -184,7 +189,7 @@ export const SCOPE_GROUPS: readonly ScopeGroup[] = [
   { domain: 'reports',            label: 'Rapporter',           scopes: ['reports:read'] },
   { domain: 'bookkeeping',        label: 'Bokföring',           scopes: ['bookkeeping:write'] },
   { domain: 'payroll',            label: 'Löner',               scopes: ['payroll:read', 'payroll:write'] },
-  { domain: 'documents',          label: 'Dokument',            scopes: ['documents:read', 'documents:write'] },
+  { domain: 'documents',          label: 'Dokument',            scopes: ['documents:read', 'documents:upload', 'documents:write'] },
   { domain: 'pending_operations', label: 'Stagade operationer', scopes: ['pending_operations:read', 'pending_operations:approve'] },
   { domain: 'agent',              label: 'Agent',               scopes: ['agent:read', 'agent:write'] },
   { domain: 'skatteverket',       label: 'Skatteverket',        scopes: ['skatteverket:write'] },

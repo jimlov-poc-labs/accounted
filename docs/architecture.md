@@ -129,6 +129,17 @@ declarations.
   (`src/extensions/general/mcp-server/public-tools.ts`).
 - Posting operations are staged: an agent proposes an operation, and a human
   approves it before anything is committed to the journal.
+- Scopes apply at every door a key is presented at, and the REST API
+  (`/api/v1/**`, `/api/events`) writes directly rather than staging. A key
+  created with **MCP only** (`api_keys.mcp_only`) authenticates on the MCP
+  server alone; every other bearer surface answers `403 API_KEY_MCP_ONLY`.
+  The check lives in `validateApiKey` (`src/lib/auth/api-keys.ts`): only the
+  MCP server asserts the `mcp` surface, every other caller defaults to `rest`,
+  so a new route is covered without opting in. An MCP-only key can never
+  hold `pending_operations:approve` (settings route and the
+  `api_keys_mcp_only_no_approve` CHECK), so it can only propose. A row
+  without the column reads as MCP-only (fail-closed), so the migration must
+  run before the code deploys.
 
 ## Events
 

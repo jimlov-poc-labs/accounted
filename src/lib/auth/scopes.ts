@@ -124,7 +124,9 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // compliance:read, mirroring the MCP gnubok_vat_declaration_status mapping.
   'GET /api/v1/companies/:companyId/skatteverket/vat-declarations': 'compliance:read',
   // Phase 4 PR-3: Documents (multipart).
-  'POST /api/v1/companies/:companyId/documents': 'documents:write',
+  // Upload only; linking at upload time (journal_entry_id / line_id) is
+  // refused in the route unless the key also holds documents:write.
+  'POST /api/v1/companies/:companyId/documents': 'documents:upload',
   'GET /api/v1/companies/:companyId/documents/:id/download': 'documents:read',
   'POST /api/v1/companies/:companyId/documents/:id/link': 'documents:write',
   // Inbox item stamp: closes an invoice_inbox_items row against the JE it

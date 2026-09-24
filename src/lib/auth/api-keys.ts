@@ -31,7 +31,9 @@ import { API_KEY_SCOPES, DEFAULT_SCOPES, type ApiKeyScope } from './scope-catalo
 export function validateScopes(scopes: unknown): ApiKeyScope[] | null {
   if (scopes === null || scopes === undefined) return null
   if (!Array.isArray(scopes)) return null
-  const valid = scopes.filter((s): s is ApiKeyScope => s in API_KEY_SCOPES)
+  const valid = scopes.filter(
+    (s): s is ApiKeyScope => typeof s === 'string' && Object.hasOwn(API_KEY_SCOPES, s),
+  )
   return valid.length > 0 ? valid : null
 }
 
@@ -151,8 +153,37 @@ export type ApiKeyMode = 'live' | 'test'
  */
 export const RATE_LIMIT_RETRY_AFTER_SECONDS = 60
 
+/**
+ * The door an API key is being presented at. Only the MCP server passes
+ * 'mcp'; every other caller gets the 'rest' default, which is what makes the
+ * mcp_only check fail closed: a new route that authenticates a key without
+ * knowing about the flag still refuses an MCP-only key.
+ */
+export type ApiKeySurface = 'mcp' | 'rest'
+
+/** Stable error code for an MCP-only key presented anywhere but MCP. */
+export const API_KEY_MCP_ONLY_CODE = 'API_KEY_MCP_ONLY'
+
+/**
+ * True unless the RPC row says, in so many words, `mcp_only: false`.
+ *
+ * Fail-closed in every direction, including a row with no `mcp_only` at all.
+ * That shape means the database's validate_and_increment_api_key predates
+ * 20260924120000 (an upstream merge that re-creates the function, or a
+ * database rolled back under newer code): reading it as "ordinary" would
+ * silently reopen REST for every MCP-only key. The price is deploy order:
+ * the migration must run BEFORE this code ships, otherwise every key is
+ * refused outside MCP until it does. Once the migration has run every row
+ * carries an explicit boolean (NOT NULL DEFAULT false), so ordinary keys read
+ * false and are unaffected.
+ */
+function readMcpOnly(row: Record<string, unknown>): boolean {
+  return row.mcp_only !== false
+}
+
 export async function validateApiKey(
-  key: string
+  key: string,
+  options: { surface?: ApiKeySurface } = {},
 ): Promise<
   | {
       userId: string
@@ -174,7 +205,7 @@ export async function validateApiKey(
        */
       unattendedCommitLimit: number | null
     }
-  | { error: string; status: number }
+  | { error: string; status: number; code?: typeof API_KEY_MCP_ONLY_CODE }
 > {
   if (isRefreshToken(key)) {
     return {
@@ -202,6 +233,18 @@ export async function validateApiKey(
 
   if (row.rate_limited) {
     return { error: 'Rate limit exceeded', status: 429 }
+  }
+
+  // MCP-only keys: the MCP server stages every write for approval; REST and
+  // the other bearer surfaces write directly. Refused after the rate-limit
+  // check so a flood of REST attempts with the key is still throttled.
+  const surface: ApiKeySurface = options.surface ?? 'rest'
+  if (surface !== 'mcp' && readMcpOnly(row)) {
+    return {
+      error: 'This API key is MCP-only and cannot be used outside the MCP server',
+      status: 403,
+      code: API_KEY_MCP_ONLY_CODE,
+    }
   }
 
   const companyId: string | null =
@@ -274,8 +317,19 @@ async function bindUnboundKey(
 }
 
 /**
- * Check if a given scope is allowed by the key's scopes.
+ * Scopes that carry a narrower scope with them. documents:upload was carved
+ * out of documents:write (upload without linking to a verifikat), so every
+ * key minted before it existed keeps the upload it always had.
+ */
+const IMPLIED_SCOPES: Partial<Record<ApiKeyScope, readonly ApiKeyScope[]>> = {
+  'documents:write': ['documents:upload'],
+}
+
+/**
+ * Check if a given scope is allowed by the key's scopes, directly or through
+ * a broader scope that implies it (IMPLIED_SCOPES).
  */
 export function hasScope(keyScopes: ApiKeyScope[], required: ApiKeyScope): boolean {
-  return keyScopes.includes(required)
+  if (keyScopes.includes(required)) return true
+  return keyScopes.some((s) => IMPLIED_SCOPES[s]?.includes(required) ?? false)
 }

@@ -65,7 +65,7 @@ function parseRequestedScopes(scopeParam: string | null): ScopeParseResult {
   // we can keep Claude's existing flow working unchanged.
   const onlyMcp = requested.length === 1 && requested[0] === 'mcp'
   if (onlyMcp) return { kind: 'ok', scopes: undefined }
-  const valid = requested.filter((s): s is ApiKeyScope => s in API_KEY_SCOPES)
+  const valid = requested.filter((s): s is ApiKeyScope => Object.hasOwn(API_KEY_SCOPES, s))
   if (valid.length === 0) {
     return {
       kind: 'invalid_scope',

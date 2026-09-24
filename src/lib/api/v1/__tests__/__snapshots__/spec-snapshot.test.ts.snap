@@ -189,6 +189,7 @@ exports[`v1 spec snapshot > matches the recorded scope catalogue > endpoint-scop
   "customers:read",
   "customers:write",
   "documents:read",
+  "documents:upload",
   "documents:write",
   "invoices:read",
   "invoices:write",

@@ -1873,9 +1873,11 @@ const TOOL_PREFLIGHT_MAP: Record<string, string> = {
  * bridge uses it to decide which writes it may carry (issue #2800).
  *
  * Deliberately NOT keyed on annotations. ANNOTATIONS_STAGED_WRITE is worn by
- * tools that commit directly (gnubok_create_transactions inserts rows,
- * gnubok_reject_pending_operation settles one), so the constant's name is not
- * a staging signal, and neither is a tool's own name. A declaration is only a
+ * tools whose outputSchema is not the envelope itself: gnubok_create_transactions
+ * stages one pending operation per row but returns a batch whose items are
+ * envelopes, and gnubok_reject_pending_operation settles one instead of
+ * staging. The constant's name is therefore not a staging signal, and neither
+ * is a tool's own name. A declaration is only a
  * claim: __tests__/staging-behaviour.test.ts executes every declaring tool
  * against a recording client and fails one that writes anywhere but
  * pending_operations, and statically refuses a mutation call in its body.
@@ -24056,7 +24058,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   let keyMode: ApiKeyMode = 'live'
   let unattendedCommitLimit: number | null = null
   if (token) {
-    const authResult = await validateApiKey(token)
+    // The only caller that asserts the MCP surface: an mcp_only key is
+    // accepted here (writes are staged for approval) and refused everywhere
+    // else by validateApiKey's 'rest' default.
+    const authResult = await validateApiKey(token, { surface: 'mcp' })
     if ('error' in authResult) {
       const status = authResult.status
       if (status === 429) {

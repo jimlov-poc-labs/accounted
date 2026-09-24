@@ -13,6 +13,15 @@
  *   journal_entry_id  (optional UUID)   : link the document to a JE at upload time
  *   journal_entry_line_id (optional UUID): link to a specific JE line
  *
+ * Scope: documents:upload (documents:write implies it). Linking at upload
+ * time is the documents:write half: an upload-only key that supplies either
+ * link field gets 403 INSUFFICIENT_SCOPE before anything is stored. An
+ * unlinked upload is read and classified by the document pipeline, and a
+ * receipt or supplier invoice is queued in Underlag (invoice_inbox_items,
+ * source 'upload') for extraction and matching (invoice-inbox
+ * routeClassifiedDocument), so an upload-only key hands in underlag that is
+ * matched and proposed, never attached to a verifikat directly.
+ *
  * Idempotent (mandatory Idempotency-Key: the SHA-256 of the bytes is the
  * deduplication anchor on retry inside the engine's `upsert: false` storage
  * write).
@@ -42,6 +51,7 @@ import {
 } from '@/lib/core/documents/document-service'
 import type { DocumentUploadSource } from '@/types'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { hasScope } from '@/lib/auth/api-keys'
 
 const DocumentUploaded = z.object({
   id: z.string().uuid(),
@@ -74,7 +84,7 @@ registerEndpoint({
   summary: 'Upload a document to the WORM archive.',
   description: `Multipart upload of a document (PDF, image or Office file) under the BFL 7 kap retention regime. The bytes are hashed (SHA-256), written to Supabase Storage, and recorded in document_attachments at version=1. Allowed MIME types: ${ALLOWED_DOCUMENT_TYPES.join(', ')}. Max size: ${MAX_DOCUMENT_SIZE / 1024 / 1024} MB.`,
   useWhen:
-    'You have a receipt, invoice scan, or supporting document for a posted verifikation and want it archived for the 7-year BFL retention period. Optionally link to a journal entry at upload time via journal_entry_id.',
+    'You have a receipt, invoice scan, or supporting document and want it archived for the 7-year BFL retention period. Without journal_entry_id it is classified and a receipt or invoice is queued in Underlag for matching (documents:upload suffices). Linking to a journal entry at upload time via journal_entry_id needs documents:write.',
   doNotUseFor:
     'Updating an existing document (no v1 update endpoint; new versions go through the dashboard). Bulk uploads: call once per file.',
   pitfalls: [
@@ -83,6 +93,7 @@ registerEndpoint({
     `Only ${ALLOWED_DOCUMENT_TYPES.join(' / ')} accepted: DOC_UPLOAD_UNSUPPORTED_TYPE otherwise.`,
     'WORM: once linked to a posted journal entry, the document row cannot be modified or deleted (DB trigger). Upload-then-link is reversible (the document exists with journal_entry_id=null until linked); once linked, treat as immutable.',
     'Dry-run is not supported on this endpoint: the engine hashes + stores + inserts in one atomic flow.',
+    'A documents:upload key (without documents:write) that sends journal_entry_id or journal_entry_line_id gets 403 INSUFFICIENT_SCOPE: upload-only keys cannot attach a document to a verifikat.',
   ],
   example: {
     request: {
@@ -105,7 +116,7 @@ registerEndpoint({
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
   },
-  scope: 'documents:write',
+  scope: 'documents:upload',
   risk: 'medium',
   idempotent: true,
   reversible: false,
@@ -176,6 +187,24 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         })
       }
       uploadSource = parsed.data
+    }
+
+    // Linking at upload time attaches the document to a verifikat, possibly a
+    // posted one where the link is WORM and cannot be undone: that is
+    // documents:write, not documents:upload. Checked on the presence of the
+    // field (even empty) so an upload-only key cannot probe the JE lookups.
+    const wantsLink = formData.has('journal_entry_id') || formData.has('journal_entry_line_id')
+    if (wantsLink && !hasScope(ctx.scopes, 'documents:write')) {
+      return v1ErrorResponseFromCode('INSUFFICIENT_SCOPE', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          required_scope: 'documents:write',
+          granted_scopes: ctx.scopes,
+          field: formData.has('journal_entry_id') ? 'journal_entry_id' : 'journal_entry_line_id',
+          message:
+            'Linking a document to a journal entry at upload needs documents:write. Upload without journal_entry_id / journal_entry_line_id; the document is queued in Underlag for matching.',
+        },
+      })
     }
 
     const journalEntryIdRaw = formData.get('journal_entry_id')

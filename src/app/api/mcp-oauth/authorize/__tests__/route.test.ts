@@ -607,6 +607,18 @@ describe('role cap on consent', () => {
     expect(location.searchParams.get('code')).toBeNull()
   })
 
+  it('bounces Object.prototype names as unrecognised scopes (own keys only)', async () => {
+    mocks.createClient.mockResolvedValue(
+      buildSupabase({ id: 'user-1' }, 'Test AB', undefined, undefined, { role: 'owner' }),
+    )
+    const response = await GET(
+      new Request(buildAuthorizeUrl({ ...params, scope: 'constructor toString' })),
+    )
+    // GET rejects before the consent page: nothing recognised was asked for.
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toBe('invalid_scope')
+  })
+
   it('member: POST keeps requested write and approve scopes', async () => {
     // Mirrors app/api/settings/api-keys: any writer role may hold approve;
     // the stage+approve combination is acknowledged, not blocked.

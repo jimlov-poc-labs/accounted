@@ -150,6 +150,11 @@ describe('validateScopes', () => {
     expect(validateScopes(['invalid:scope', 'also:invalid'])).toBeNull()
   })
 
+  it('rejects Object.prototype keys and non-strings (own keys only)', () => {
+    expect(validateScopes(['constructor', 'toString', '__proto__', 'hasOwnProperty'])).toBeNull()
+    expect(validateScopes(['constructor', 'reports:read', 42, null])).toEqual(['reports:read'])
+  })
+
   it('preserves valid scopes from mixed input', () => {
     const result = validateScopes(['customers:write', 'bogus', 'invoices:read'])
     expect(result).toEqual(['customers:write', 'invoices:read'])
@@ -167,6 +172,16 @@ describe('hasScope', () => {
 
   it('returns false when scope absent', () => {
     expect(hasScope(['transactions:read', 'reports:read'], 'invoices:write')).toBe(false)
+  })
+
+  it('lets documents:write imply documents:upload (keys minted before the split keep uploading)', () => {
+    expect(hasScope(['documents:write'], 'documents:upload')).toBe(true)
+    expect(hasScope(['documents:upload'], 'documents:upload')).toBe(true)
+  })
+
+  it('never lets documents:upload imply documents:write', () => {
+    expect(hasScope(['documents:upload'], 'documents:write')).toBe(false)
+    expect(hasScope(['documents:upload', 'documents:read'], 'documents:write')).toBe(false)
   })
 })
 
@@ -238,8 +253,14 @@ describe('agent:write scope', () => {
 // ============================================================
 
 describe('validateApiKey', () => {
-  function setupMockRpc(response: { data: unknown; error: unknown }) {
-    const mockRpc = vi.fn().mockResolvedValue(response)
+  // Every row the migrated RPC returns carries an explicit mcp_only; a row
+  // without it is the fail-closed case and is only built on purpose (raw).
+  function setupMockRpc(response: { data: unknown; error: unknown }, opts: { raw?: boolean } = {}) {
+    const data =
+      !opts.raw && Array.isArray(response.data)
+        ? response.data.map((r: Record<string, unknown>) => ({ mcp_only: false, ...r }))
+        : response.data
+    const mockRpc = vi.fn().mockResolvedValue({ ...response, data })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     mockCreateClient.mockReturnValue({ rpc: mockRpc } as any)
   }
@@ -389,6 +410,80 @@ describe('validateApiKey', () => {
     })
   })
 
+  describe('mcp_only keys (api_keys.mcp_only, 20260924120000)', () => {
+    function rpcRow(mcpOnly: unknown, extra: Record<string, unknown> = {}) {
+      const row: Record<string, unknown> = {
+        user_id: 'user-123',
+        company_id: 'company-456',
+        api_key_id: 'ak_mcp',
+        scopes: ['bookkeeping:write', 'reports:read'],
+        rate_limited: false,
+        ...extra,
+      }
+      if (mcpOnly !== 'omit') row.mcp_only = mcpOnly
+      return row
+    }
+
+    it('refuses an MCP-only key on the default (REST) surface with 403 API_KEY_MCP_ONLY', async () => {
+      setupMockRpc({ data: [rpcRow(true)], error: null })
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect(result).toMatchObject({ status: 403, code: 'API_KEY_MCP_ONLY' })
+    })
+
+    it('refuses an MCP-only key when the caller asserts rest explicitly', async () => {
+      setupMockRpc({ data: [rpcRow(true)], error: null })
+      const result = await validateApiKey('gnubok_sk_test-key-value', { surface: 'rest' })
+      expect(result).toMatchObject({ status: 403, code: 'API_KEY_MCP_ONLY' })
+    })
+
+    it('accepts an MCP-only key on the MCP surface', async () => {
+      setupMockRpc({ data: [rpcRow(true)], error: null })
+      const result = await validateApiKey('gnubok_sk_test-key-value', { surface: 'mcp' })
+      expect(result).toMatchObject({
+        userId: 'user-123',
+        companyId: 'company-456',
+        apiKeyId: 'ak_mcp',
+        scopes: ['bookkeeping:write', 'reports:read'],
+      })
+      expect(result).not.toHaveProperty('error')
+    })
+
+    it('leaves ordinary keys unaffected on both surfaces', async () => {
+      for (const surface of [undefined, 'rest', 'mcp'] as const) {
+        setupMockRpc({ data: [rpcRow(false)], error: null })
+        const result = await validateApiKey('gnubok_sk_test-key-value', surface ? { surface } : undefined)
+        expect(result).not.toHaveProperty('error')
+        expect(result).toMatchObject({ userId: 'user-123' })
+      }
+    })
+
+    it('fails closed on an absent column (RPC that predates the migration)', async () => {
+      // An upstream merge that re-creates the RPC without mcp_only, or a
+      // rolled-back database, must not silently reopen REST for MCP-only keys.
+      setupMockRpc({ data: [rpcRow('omit')], error: null }, { raw: true })
+      const rest = await validateApiKey('gnubok_sk_test-key-value')
+      expect(rest).toMatchObject({ status: 403, code: 'API_KEY_MCP_ONLY' })
+
+      setupMockRpc({ data: [rpcRow('omit')], error: null }, { raw: true })
+      const mcp = await validateApiKey('gnubok_sk_test-key-value', { surface: 'mcp' })
+      expect(mcp).not.toHaveProperty('error')
+    })
+
+    it('fails closed on a present but non-boolean value', async () => {
+      for (const raw of [null, undefined, 'true', 1, 0]) {
+        setupMockRpc({ data: [rpcRow(raw)], error: null }, { raw: true })
+        const result = await validateApiKey('gnubok_sk_test-key-value')
+        expect(result).toMatchObject({ status: 403, code: 'API_KEY_MCP_ONLY' })
+      }
+    })
+
+    it('keeps the rate limit ahead of the surface check', async () => {
+      setupMockRpc({ data: [rpcRow(true, { rate_limited: true })], error: null })
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect(result).toEqual({ error: 'Rate limit exceeded', status: 429 })
+    })
+  })
+
   describe('unbound keys (minted before the first company existed, issue #1814)', () => {
     function setupUnboundKeyClient(rpcRow: Record<string, unknown>) {
       const chain = {
@@ -413,6 +508,7 @@ describe('validateApiKey', () => {
       scopes: ['transactions:read'],
       rate_limited: false,
       mode: 'live',
+      mcp_only: false,
     }
 
     it('binds the key to the user\'s company once one exists and heals the row', async () => {
