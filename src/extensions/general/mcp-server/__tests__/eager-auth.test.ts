@@ -109,7 +109,7 @@ describe('MCP eager authentication (auth=required)', () => {
       rpc('tools/call', { name: 'gnubok_list_skills', arguments: {} }, { token: 'gnubok_sk_x', query: 'auth=required' })
     )
     expect(response.status).toBe(200)
-    expect(mocks.validateApiKey).toHaveBeenCalledWith('gnubok_sk_x')
+    expect(mocks.validateApiKey).toHaveBeenCalledWith('gnubok_sk_x', { surface: 'mcp' })
   })
 
   it('only the exact flag opts out of lazy authentication', async () => {

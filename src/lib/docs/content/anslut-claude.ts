@@ -114,6 +114,8 @@ Bäst när du hellre använder en långlivad API-nyckel än OAuth-flödet, eller
 
 Nyckelns rättigheter styr exakt vilka verktyg som går att kalla: en nyckel utan skrivrättigheter kan läsa rapporter och reskontror men inte lägga upp en bokföring.
 
+Kryssa i **Endast MCP** när du skapar nyckeln om agenten bara ska föreslå: nyckeln fungerar då bara mot MCP-servern, där varje skrivning stagas och väntar på ditt godkännande, och REST-API:t nekar den med \`403 API_KEY_MCP_ONLY\`. Ge inte samma nyckel \`pending_operations:approve\`, annars kan den godkänna sina egna förslag.
+
 Nyckelvärdet börjar fortfarande med \`gnubok_sk_\`. Det är ett stabilt kreditformat, inte namnet på integrationen. Befintliga \`gnubok-mcp\`-konfigurationer fortsätter att fungera oförändrade.
 
 ## Testa med de här frågorna

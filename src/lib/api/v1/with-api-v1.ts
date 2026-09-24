@@ -357,7 +357,9 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       if ('error' in auth) {
         log.warn('api key validation failed', { status: auth.status, reason: auth.error, ...forensic })
         const rateLimited = auth.status === 429
-        const code = rateLimited ? 'RATE_LIMITED' : 'UNAUTHORIZED'
+        // An MCP-only key is a valid credential refused at this door: 403
+        // with its own code, not a 401 that reads as "wrong key".
+        const code = auth.code ?? (rateLimited ? 'RATE_LIMITED' : 'UNAUTHORIZED')
         return await v1ErrorResponseFromCode(code, log, {
           requestId,
           reason: auth.error,

@@ -107,6 +107,8 @@ Best for Claude Desktop on a machine where you'd rather use a long-lived API key
 
 The key's scopes gate exactly which tools are callable: a key without write scopes can read reports and ledgers but cannot stage a booking.
 
+Tick **MCP only** when you mint the key if the agent should only propose: the key then works only against the MCP server, where every write is staged for your approval, and the REST API refuses it with \`403 API_KEY_MCP_ONLY\`. Do not give the same key \`pending_operations:approve\`, or it can approve its own proposals.
+
 The API-key value still begins with \`gnubok_sk_\`. That is a stable credential
 format, not the MCP integration name. Existing \`gnubok-mcp\` configurations
 continue to work without changes.

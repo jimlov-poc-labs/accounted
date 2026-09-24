@@ -389,6 +389,74 @@ describe('validateApiKey', () => {
     })
   })
 
+  describe('mcp_only keys (api_keys.mcp_only, 20260924120000)', () => {
+    function rpcRow(mcpOnly: unknown, extra: Record<string, unknown> = {}) {
+      const row: Record<string, unknown> = {
+        user_id: 'user-123',
+        company_id: 'company-456',
+        api_key_id: 'ak_mcp',
+        scopes: ['bookkeeping:write', 'reports:read'],
+        rate_limited: false,
+        ...extra,
+      }
+      if (mcpOnly !== 'omit') row.mcp_only = mcpOnly
+      return row
+    }
+
+    it('refuses an MCP-only key on the default (REST) surface with 403 API_KEY_MCP_ONLY', async () => {
+      setupMockRpc({ data: [rpcRow(true)], error: null })
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect(result).toMatchObject({ status: 403, code: 'API_KEY_MCP_ONLY' })
+    })
+
+    it('refuses an MCP-only key when the caller asserts rest explicitly', async () => {
+      setupMockRpc({ data: [rpcRow(true)], error: null })
+      const result = await validateApiKey('gnubok_sk_test-key-value', { surface: 'rest' })
+      expect(result).toMatchObject({ status: 403, code: 'API_KEY_MCP_ONLY' })
+    })
+
+    it('accepts an MCP-only key on the MCP surface', async () => {
+      setupMockRpc({ data: [rpcRow(true)], error: null })
+      const result = await validateApiKey('gnubok_sk_test-key-value', { surface: 'mcp' })
+      expect(result).toMatchObject({
+        userId: 'user-123',
+        companyId: 'company-456',
+        apiKeyId: 'ak_mcp',
+        scopes: ['bookkeeping:write', 'reports:read'],
+      })
+      expect(result).not.toHaveProperty('error')
+    })
+
+    it('leaves ordinary keys unaffected on both surfaces', async () => {
+      for (const surface of [undefined, 'rest', 'mcp'] as const) {
+        setupMockRpc({ data: [rpcRow(false)], error: null })
+        const result = await validateApiKey('gnubok_sk_test-key-value', surface ? { surface } : undefined)
+        expect(result).not.toHaveProperty('error')
+        expect(result).toMatchObject({ userId: 'user-123' })
+      }
+    })
+
+    it('reads an absent column (database before the migration) as an ordinary key', async () => {
+      setupMockRpc({ data: [rpcRow('omit')], error: null })
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect(result).not.toHaveProperty('error')
+    })
+
+    it('fails closed on a present but non-boolean value', async () => {
+      for (const raw of [null, 'true', 1]) {
+        setupMockRpc({ data: [rpcRow(raw)], error: null })
+        const result = await validateApiKey('gnubok_sk_test-key-value')
+        expect(result).toMatchObject({ status: 403, code: 'API_KEY_MCP_ONLY' })
+      }
+    })
+
+    it('keeps the rate limit ahead of the surface check', async () => {
+      setupMockRpc({ data: [rpcRow(true, { rate_limited: true })], error: null })
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect(result).toEqual({ error: 'Rate limit exceeded', status: 429 })
+    })
+  })
+
   describe('unbound keys (minted before the first company existed, issue #1814)', () => {
     function setupUnboundKeyClient(rpcRow: Record<string, unknown>) {
       const chain = {

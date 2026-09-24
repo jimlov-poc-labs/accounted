@@ -3969,6 +3969,20 @@ const API_KEY: Record<string, StructuredErrorEntry> = {
     message_sv: 'API-nyckeln kunde inte hittas.',
     message_en: 'API key not found.',
   },
+  // An MCP-only key (api_keys.mcp_only) presented at REST or any other
+  // bearer surface. Permanent: retrying with the same key never succeeds.
+  API_KEY_MCP_ONLY: {
+    httpStatus: 403,
+    message_sv:
+      'API-nyckeln får bara användas via MCP-servern, där skrivningar stagas för godkännande. REST-API:t och övriga ingångar är avstängda för den.',
+    message_en:
+      'This API key is MCP-only: it works on the MCP server, where writes are staged for approval, and is refused by the REST API and every other surface.',
+    retryable: false,
+    remediation: {
+      description:
+        'Call the MCP server with this key, or mint a key without mcp_only for REST integrations.',
+    },
+  },
   API_KEY_SOD_CONFLICT: {
     httpStatus: 409,
     message_sv:

@@ -21,7 +21,7 @@ export const GET = withRouteContext(
     // active company too: they're simulation-only, so they never write real data.)
     const { data, error } = await supabase
       .from('api_keys')
-      .select('id, key_prefix, name, scopes, mode, rate_limit_rpm, unattended_commit_limit, last_used_at, revoked_at, created_at')
+      .select('id, key_prefix, name, scopes, mode, mcp_only, rate_limit_rpm, unattended_commit_limit, last_used_at, revoked_at, created_at')
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
 
@@ -49,6 +49,10 @@ export const POST = withRouteContext(
     let scopes: ApiKeyScope[] = DEFAULT_SCOPES
     let acknowledgeSod = false
     let mode: ApiKeyMode = 'live'
+    // MCP-only: the key authenticates on the MCP server (writes staged for
+    // approval) and is refused by REST and every other bearer surface
+    // (validateApiKey). Strictly `true` opts in; anything else is a normal key.
+    let mcpOnly = false
     try {
       const body = await request.json()
       if (body.name && typeof body.name === 'string') {
@@ -56,6 +60,7 @@ export const POST = withRouteContext(
       }
       acknowledgeSod = body.acknowledge_sod === true
       if (body.mode === 'test') mode = 'test'
+      mcpOnly = body.mcp_only === true
       const parsed = validateScopes(body.scopes)
       if (parsed) {
         scopes = parsed
@@ -125,11 +130,12 @@ export const POST = withRouteContext(
         name,
         scopes,
         mode,
+        mcp_only: mcpOnly,
         ...(sodAcknowledgedAt
           ? { sod_acknowledged_at: sodAcknowledgedAt, sod_acknowledged_by: user.id }
           : {}),
       })
-      .select('id, key_prefix, name, scopes, mode, created_at')
+      .select('id, key_prefix, name, scopes, mode, mcp_only, created_at')
       .single()
 
     if (error) {
@@ -150,6 +156,7 @@ export const POST = withRouteContext(
         keyPrefix: data.key_prefix,
         conflictingScope,
         scopes,
+        mcpOnly,
         acknowledgedBy: user.id,
         companyId,
       })

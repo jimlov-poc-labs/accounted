@@ -151,8 +151,35 @@ export type ApiKeyMode = 'live' | 'test'
  */
 export const RATE_LIMIT_RETRY_AFTER_SECONDS = 60
 
+/**
+ * The door an API key is being presented at. Only the MCP server passes
+ * 'mcp'; every other caller gets the 'rest' default, which is what makes the
+ * mcp_only check fail closed: a new route that authenticates a key without
+ * knowing about the flag still refuses an MCP-only key.
+ */
+export type ApiKeySurface = 'mcp' | 'rest'
+
+/** Stable error code for an MCP-only key presented anywhere but MCP. */
+export const API_KEY_MCP_ONLY_CODE = 'API_KEY_MCP_ONLY'
+
+/**
+ * True unless the RPC row says, in so many words, `mcp_only: false`.
+ *
+ * Absent (a database that has not run 20260924120000 yet) reads as false:
+ * no key can carry the flag before the column exists, and reading absence as
+ * true would lock every key out of REST during the deploy window. Anything
+ * present but not literally false (null, a string) reads as MCP-only: the
+ * column is NOT NULL boolean, so such a value means something is wrong, and
+ * the safe reading of "we cannot tell" is the narrower surface.
+ */
+function readMcpOnly(row: Record<string, unknown>): boolean {
+  if (!('mcp_only' in row) || row.mcp_only === undefined) return false
+  return row.mcp_only !== false
+}
+
 export async function validateApiKey(
-  key: string
+  key: string,
+  options: { surface?: ApiKeySurface } = {},
 ): Promise<
   | {
       userId: string
@@ -174,7 +201,7 @@ export async function validateApiKey(
        */
       unattendedCommitLimit: number | null
     }
-  | { error: string; status: number }
+  | { error: string; status: number; code?: typeof API_KEY_MCP_ONLY_CODE }
 > {
   if (isRefreshToken(key)) {
     return {
@@ -202,6 +229,18 @@ export async function validateApiKey(
 
   if (row.rate_limited) {
     return { error: 'Rate limit exceeded', status: 429 }
+  }
+
+  // MCP-only keys: the MCP server stages every write for approval; REST and
+  // the other bearer surfaces write directly. Refused after the rate-limit
+  // check so a flood of REST attempts with the key is still throttled.
+  const surface: ApiKeySurface = options.surface ?? 'rest'
+  if (surface !== 'mcp' && readMcpOnly(row)) {
+    return {
+      error: 'This API key is MCP-only and cannot be used outside the MCP server',
+      status: 403,
+      code: API_KEY_MCP_ONLY_CODE,
+    }
   }
 
   const companyId: string | null =

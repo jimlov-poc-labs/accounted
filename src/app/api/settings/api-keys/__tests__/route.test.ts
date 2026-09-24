@@ -28,6 +28,8 @@ vi.mock('@/lib/auth/require-write', () => ({
 import { POST } from '../route'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
+/** The static route's second argument, as Next.js hands it over. */
+const noParams = { params: Promise.resolve({}) as Promise<Record<string, never>> }
 
 // Records the payload passed to .insert(), and lets us program the count
 // returned by the quota pre-check and the row returned by the insert.
@@ -210,6 +212,71 @@ describe('POST /api/settings/api-keys', () => {
     // Default mode is live, bound to the active company.
     expect(payload.mode).toBe('live')
     expect(payload.company_id).toBe('company-1')
+    // Not MCP-only unless asked for: existing integrations keep REST.
+    expect(payload.mcp_only).toBe(false)
+  })
+
+  it('stores mcp_only: true when the body opts in', async () => {
+    const { insertSpy } = setupFrom({
+      count: 0,
+      insertResult: {
+        data: {
+          id: 'ak-4',
+          key_prefix: 'gnubok_sk_mcp1',
+          name: 'proposer',
+          scopes: ['bookkeeping:write', 'reports:read'],
+          mode: 'live',
+          mcp_only: true,
+          created_at: '2026-09-24T10:00:00Z',
+        },
+      },
+    })
+    const res = await POST(
+      createMockRequest('/api/settings/api-keys', {
+        method: 'POST',
+        body: { name: 'proposer', scopes: ['bookkeeping:write', 'reports:read'], mcp_only: true },
+      }),
+      noParams,
+    )
+    const { status, body } = await parseJsonResponse<{ data: { mcp_only: boolean } }>(res)
+    expect(status).toBe(200)
+    expect(body.data.mcp_only).toBe(true)
+    const payload = insertSpy.mock.calls[0][0] as Record<string, unknown>
+    expect(payload.mcp_only).toBe(true)
+  })
+
+  it('treats a truthy non-boolean mcp_only as a normal key (strict opt-in)', async () => {
+    const { insertSpy } = setupFrom({
+      count: 0,
+      insertResult: { data: { id: 'ak-5', key_prefix: 'gnubok_sk_x', name: 'x', scopes: ['reports:read'] } },
+    })
+    await POST(
+      createMockRequest('/api/settings/api-keys', {
+        method: 'POST',
+        body: { name: 'x', scopes: ['reports:read'], mcp_only: 'yes' },
+      }),
+      noParams,
+    )
+    const payload = insertSpy.mock.calls[0][0] as Record<string, unknown>
+    expect(payload.mcp_only).toBe(false)
+  })
+
+  it('still requires the SoD acknowledgement for an MCP-only key that can stage and approve', async () => {
+    setupFrom({ count: 0 })
+    const res = await POST(
+      createMockRequest('/api/settings/api-keys', {
+        method: 'POST',
+        body: {
+          name: 'self-approver',
+          scopes: ['bookkeeping:write', 'pending_operations:approve'],
+          mcp_only: true,
+        },
+      }),
+      noParams,
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('API_KEY_SOD_CONFLICT')
   })
 
   it('creates a test key bound to the active company with mode=test', async () => {

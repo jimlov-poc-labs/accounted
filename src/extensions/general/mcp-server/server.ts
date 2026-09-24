@@ -24056,7 +24056,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   let keyMode: ApiKeyMode = 'live'
   let unattendedCommitLimit: number | null = null
   if (token) {
-    const authResult = await validateApiKey(token)
+    // The only caller that asserts the MCP surface: an mcp_only key is
+    // accepted here (writes are staged for approval) and refused everywhere
+    // else by validateApiKey's 'rest' default.
+    const authResult = await validateApiKey(token, { surface: 'mcp' })
     if ('error' in authResult) {
       const status = authResult.status
       if (status === 429) {
