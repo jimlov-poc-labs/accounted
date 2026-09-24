@@ -3028,6 +3028,7 @@
     "scope_pending_operations_read": "Läs: lista pending_operations som väntar på godkännande",
     "scope_pending_operations_approve": "Godkänn: committa eller avvisa staged ops via API (ersätter web-UI:s granskning)",
     "scope_documents_read": "Läs: lista och hämta dokumentbilagor",
+    "scope_documents_upload": "Ladda upp: lämna underlag utan att koppla dem till verifikat, kvitton och fakturor hamnar i Underlag för matchning",
     "scope_documents_write": "Skriv: ladda upp och koppla dokument till verifikationer",
     "scope_companies_read": "Läs: företagsprofiler nyckeln har åtkomst till",
     "scope_companies_write": "Skriv: skapa företag och uppdatera företagsinställningar",

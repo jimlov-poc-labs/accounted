@@ -168,6 +168,16 @@ describe('hasScope', () => {
   it('returns false when scope absent', () => {
     expect(hasScope(['transactions:read', 'reports:read'], 'invoices:write')).toBe(false)
   })
+
+  it('lets documents:write imply documents:upload (keys minted before the split keep uploading)', () => {
+    expect(hasScope(['documents:write'], 'documents:upload')).toBe(true)
+    expect(hasScope(['documents:upload'], 'documents:upload')).toBe(true)
+  })
+
+  it('never lets documents:upload imply documents:write', () => {
+    expect(hasScope(['documents:upload'], 'documents:write')).toBe(false)
+    expect(hasScope(['documents:upload', 'documents:read'], 'documents:write')).toBe(false)
+  })
 })
 
 // ============================================================

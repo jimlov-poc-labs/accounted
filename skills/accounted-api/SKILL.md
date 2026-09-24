@@ -251,7 +251,7 @@ POST /companies/{companyId}/suppliers/bulk-create : Create up to 50 suppliers in
 Full detail: [references/documents.md](references/documents.md)
 
 ```text
-POST /companies/{companyId}/documents : Upload a document to the WORM archive [scope:documents:write risk:medium idempotent]
+POST /companies/{companyId}/documents : Upload a document to the WORM archive [scope:documents:upload risk:medium idempotent]
 GET /companies/{companyId}/documents/{id}/download : Get a time-limited signed download URL for a document [scope:documents:read risk:low idempotent]
 POST /companies/{companyId}/documents/{id}/link : Link a document to a journal entry [scope:documents:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/inbox-items/{id}/stamp : Mark an inbox item as consumed by a journal entry [scope:documents:write risk:low idempotent]

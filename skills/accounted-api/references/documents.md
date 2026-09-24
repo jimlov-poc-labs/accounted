@@ -10,11 +10,11 @@ are in SKILL.md and are not repeated per endpoint.
 ### `POST /api/v1/companies/{companyId}/documents`
 
 **Upload a document to the WORM archive.**
-`scope:documents:write · risk:medium · idempotent`
+`scope:documents:upload · risk:medium · idempotent`
 
 Multipart upload of a document (PDF, image or Office file) under the BFL 7 kap retention regime. The bytes are hashed (SHA-256), written to Supabase Storage, and recorded in document_attachments at version=1. Allowed MIME types: application/pdf, image/jpeg, image/png, image/webp, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.openxmlformats-officedocument.presentationml.presentation, application/msword, application/vnd.ms-excel, application/vnd.ms-powerpoint, application/vnd.oasis.opendocument.text, application/vnd.oasis.opendocument.spreadsheet, application/vnd.oasis.opendocument.presentation, application/rtf, text/rtf, text/csv. Max size: 10 MB.
 
-**Use when:** You have a receipt, invoice scan, or supporting document for a posted verifikation and want it archived for the 7-year BFL retention period. Optionally link to a journal entry at upload time via journal_entry_id.
+**Use when:** You have a receipt, invoice scan, or supporting document and want it archived for the 7-year BFL retention period. Without journal_entry_id it is classified and a receipt or invoice is queued in Underlag for matching (documents:upload suffices). Linking to a journal entry at upload time via journal_entry_id needs documents:write.
 **Do not use for:** Updating an existing document (no v1 update endpoint; new versions go through the dashboard). Bulk uploads: call once per file.
 
 **Pitfalls:**
@@ -23,6 +23,7 @@ Multipart upload of a document (PDF, image or Office file) under the BFL 7 kap r
 - Only application/pdf / image/jpeg / image/png / image/webp / application/vnd.openxmlformats-officedocument.wordprocessingml.document / application/vnd.openxmlformats-officedocument.spreadsheetml.sheet / application/vnd.openxmlformats-officedocument.presentationml.presentation / application/msword / application/vnd.ms-excel / application/vnd.ms-powerpoint / application/vnd.oasis.opendocument.text / application/vnd.oasis.opendocument.spreadsheet / application/vnd.oasis.opendocument.presentation / application/rtf / text/rtf / text/csv accepted: DOC_UPLOAD_UNSUPPORTED_TYPE otherwise.
 - WORM: once linked to a posted journal entry, the document row cannot be modified or deleted (DB trigger). Upload-then-link is reversible (the document exists with journal_entry_id=null until linked); once linked, treat as immutable.
 - Dry-run is not supported on this endpoint: the engine hashes + stores + inserts in one atomic flow.
+- A documents:upload key (without documents:write) that sends journal_entry_id or journal_entry_line_id gets 403 INSUFFICIENT_SCOPE: upload-only keys cannot attach a document to a verifikat.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

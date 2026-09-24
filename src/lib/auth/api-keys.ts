@@ -313,8 +313,19 @@ async function bindUnboundKey(
 }
 
 /**
- * Check if a given scope is allowed by the key's scopes.
+ * Scopes that carry a narrower scope with them. documents:upload was carved
+ * out of documents:write (upload without linking to a verifikat), so every
+ * key minted before it existed keeps the upload it always had.
+ */
+const IMPLIED_SCOPES: Partial<Record<ApiKeyScope, readonly ApiKeyScope[]>> = {
+  'documents:write': ['documents:upload'],
+}
+
+/**
+ * Check if a given scope is allowed by the key's scopes, directly or through
+ * a broader scope that implies it (IMPLIED_SCOPES).
  */
 export function hasScope(keyScopes: ApiKeyScope[], required: ApiKeyScope): boolean {
-  return keyScopes.includes(required)
+  if (keyScopes.includes(required)) return true
+  return keyScopes.some((s) => IMPLIED_SCOPES[s]?.includes(required) ?? false)
 }

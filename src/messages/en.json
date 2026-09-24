@@ -3028,6 +3028,7 @@
     "scope_pending_operations_read": "Read: list pending_operations awaiting approval",
     "scope_pending_operations_approve": "Approve: commit or reject staged ops via API (replaces web UI review)",
     "scope_documents_read": "Read: list and fetch document attachments",
+    "scope_documents_upload": "Upload: hand in documents without linking them to vouchers; receipts and invoices are queued in Underlag for matching",
     "scope_documents_write": "Write: upload and link documents to vouchers",
     "scope_companies_read": "Read: company profiles the key has access to",
     "scope_companies_write": "Write: create companies and update company settings",
