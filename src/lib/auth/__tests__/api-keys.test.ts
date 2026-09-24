@@ -150,6 +150,11 @@ describe('validateScopes', () => {
     expect(validateScopes(['invalid:scope', 'also:invalid'])).toBeNull()
   })
 
+  it('rejects Object.prototype keys and non-strings (own keys only)', () => {
+    expect(validateScopes(['constructor', 'toString', '__proto__', 'hasOwnProperty'])).toBeNull()
+    expect(validateScopes(['constructor', 'reports:read', 42, null])).toEqual(['reports:read'])
+  })
+
   it('preserves valid scopes from mixed input', () => {
     const result = validateScopes(['customers:write', 'bogus', 'invoices:read'])
     expect(result).toEqual(['customers:write', 'invoices:read'])

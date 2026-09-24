@@ -31,7 +31,9 @@ import { API_KEY_SCOPES, DEFAULT_SCOPES, type ApiKeyScope } from './scope-catalo
 export function validateScopes(scopes: unknown): ApiKeyScope[] | null {
   if (scopes === null || scopes === undefined) return null
   if (!Array.isArray(scopes)) return null
-  const valid = scopes.filter((s): s is ApiKeyScope => s in API_KEY_SCOPES)
+  const valid = scopes.filter(
+    (s): s is ApiKeyScope => typeof s === 'string' && Object.hasOwn(API_KEY_SCOPES, s),
+  )
   return valid.length > 0 ? valid : null
 }
 
