@@ -135,8 +135,11 @@ declarations.
   server alone; every other bearer surface answers `403 API_KEY_MCP_ONLY`.
   The check lives in `validateApiKey` (`src/lib/auth/api-keys.ts`): only the
   MCP server asserts the `mcp` surface, every other caller defaults to `rest`,
-  so a new route is covered without opting in. Such a key plus no
-  `pending_operations:approve` is a key that can only propose.
+  so a new route is covered without opting in. An MCP-only key can never
+  hold `pending_operations:approve` (settings route and the
+  `api_keys_mcp_only_no_approve` CHECK), so it can only propose. A row
+  without the column reads as MCP-only (fail-closed), so the migration must
+  run before the code deploys.
 
 ## Events
 

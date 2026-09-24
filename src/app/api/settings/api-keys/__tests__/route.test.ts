@@ -261,16 +261,37 @@ describe('POST /api/settings/api-keys', () => {
     expect(payload.mcp_only).toBe(false)
   })
 
-  it('still requires the SoD acknowledgement for an MCP-only key that can stage and approve', async () => {
+  it('refuses an MCP-only key with pending_operations:approve, even with acknowledge_sod', async () => {
+    const { insertSpy } = setupFrom({ count: 0 })
+    for (const scopes of [
+      ['bookkeeping:write', 'pending_operations:approve'],
+      // Approve without any staging scope is still refused: the flag means
+      // the key cannot settle a pending operation at all.
+      ['reports:read', 'pending_operations:approve'],
+    ]) {
+      const res = await POST(
+        createMockRequest('/api/settings/api-keys', {
+          method: 'POST',
+          body: { name: 'self-approver', scopes, mcp_only: true, acknowledge_sod: true },
+        }),
+        noParams,
+      )
+      const { status, body } = await parseJsonResponse<{
+        error: { code: string; details: { field: string; reason: string } }
+      }>(res)
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(body.error.details).toMatchObject({ field: 'scopes', reason: 'mcp_only_cannot_approve' })
+    }
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
+  it('keeps the SoD acknowledgement path for an ordinary stage+approve key', async () => {
     setupFrom({ count: 0 })
     const res = await POST(
       createMockRequest('/api/settings/api-keys', {
         method: 'POST',
-        body: {
-          name: 'self-approver',
-          scopes: ['bookkeeping:write', 'pending_operations:approve'],
-          mcp_only: true,
-        },
+        body: { name: 'ordinary', scopes: ['bookkeeping:write', 'pending_operations:approve'] },
       }),
       noParams,
     )

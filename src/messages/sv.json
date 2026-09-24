@@ -2945,7 +2945,7 @@
     "mode_test_help": "Testnycklar simulerar varje anrop (tvingad dry-run): du ser exakt vad som skulle hända, men inget sparas eller skickas.",
     "badge_test": "Test",
     "mcp_only_label": "Endast MCP",
-    "mcp_only_help": "Nyckeln fungerar bara mot MCP-servern, där varje skrivning stagas och väntar på godkännande. REST-API:t och övriga ingångar nekar den. Använd det för en agent som bara ska föreslå.",
+    "mcp_only_help": "Nyckeln fungerar bara mot MCP-servern, där varje skrivning stagas och väntar på godkännande. REST-API:t och övriga ingångar nekar den, och den kan aldrig få rätt att godkänna. Använd det för en agent som bara ska föreslå.",
     "mcp_only_badge": "Endast MCP",
     "revoke_dialog_title": "Återkalla API-nyckel",
     "revoke_dialog_description": "\"{name}\" återkallas permanent. Alla klienter som använder nyckeln slutar fungera omedelbart.",

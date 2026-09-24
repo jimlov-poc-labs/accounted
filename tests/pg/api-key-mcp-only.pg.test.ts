@@ -13,7 +13,10 @@ import { getPool, withUserContext } from './setup'
  *      (a new return column is a DROP + CREATE; a second overload would make
  *      PostgREST answer 300 on the ambiguity);
  *   3. EXECUTE stays service_role only after the re-create;
- *   4. a JWT session may set it at INSERT but never flip it afterwards.
+ *   4. a JWT session may set it at INSERT but never flip it afterwards;
+ *   5. an MCP-only key can never hold pending_operations:approve
+ *      (CHECK api_keys_mcp_only_no_approve, 20260924130000), neither at
+ *      INSERT nor by a later UPDATE of scopes or of the flag.
  */
 
 function sha256(s: string): string {
@@ -128,5 +131,74 @@ describe('api_keys.mcp_only (pg)', () => {
         expect(res.rows).toHaveLength(1)
       })
     }
+  })
+
+  it('refuses an MCP-only key with pending_operations:approve at INSERT', async () => {
+    const { userId, companyId } = await seedOwner()
+    for (const scopes of [
+      ['bookkeeping:write', 'pending_operations:approve'],
+      ['pending_operations:approve'],
+    ]) {
+      await expect(
+        getPool().query(
+          `INSERT INTO public.api_keys (user_id, company_id, key_hash, key_prefix, name, scopes, mcp_only)
+           VALUES ($1, $2, $3, 'gnubok_sk_mcponly', 'Self-approver', $4, true)`,
+          [userId, companyId, sha256(randomUUID()), scopes],
+        ),
+      ).rejects.toMatchObject({ code: '23514', constraint: 'api_keys_mcp_only_no_approve' })
+    }
+    // Same scopes without the flag stay allowed (the SoD gate is the route's job).
+    await getPool().query(
+      `INSERT INTO public.api_keys (user_id, company_id, key_hash, key_prefix, name, scopes, mcp_only)
+       VALUES ($1, $2, $3, 'gnubok_sk_ordinary', 'Ordinary approver', $4, false)`,
+      [userId, companyId, sha256(randomUUID()), ['bookkeeping:write', 'pending_operations:approve']],
+    )
+  })
+
+  it('refuses adding approve to an MCP-only key, or flagging an approving key, by UPDATE', async () => {
+    const { userId, companyId } = await seedOwner()
+    const { rows: [mcp] } = await getPool().query<{ id: string }>(
+      `INSERT INTO public.api_keys (user_id, company_id, key_hash, key_prefix, name, scopes, mcp_only)
+       VALUES ($1, $2, $3, 'gnubok_sk_mcponly', 'Proposer', ARRAY['bookkeeping:write'], true)
+       RETURNING id`,
+      [userId, companyId, sha256(randomUUID())],
+    )
+    const { rows: [approver] } = await getPool().query<{ id: string }>(
+      `INSERT INTO public.api_keys (user_id, company_id, key_hash, key_prefix, name, scopes, mcp_only)
+       VALUES ($1, $2, $3, 'gnubok_sk_approver', 'Approver', ARRAY['pending_operations:approve'], false)
+       RETURNING id`,
+      [userId, companyId, sha256(randomUUID())],
+    )
+
+    // As the owner's own session (RLS lets an admin update scopes)...
+    await expect(
+      withUserContext(userId, (client) =>
+        client.query(
+          `UPDATE public.api_keys SET scopes = array_append(scopes, 'pending_operations:approve') WHERE id = $1`,
+          [mcp!.id],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: '23514', constraint: 'api_keys_mcp_only_no_approve' })
+    // ...and as the service role, which bypasses RLS and the JWT guard.
+    await expect(
+      getPool().query(
+        `UPDATE public.api_keys SET scopes = array_append(scopes, 'pending_operations:approve') WHERE id = $1`,
+        [mcp!.id],
+      ),
+    ).rejects.toMatchObject({ code: '23514', constraint: 'api_keys_mcp_only_no_approve' })
+    await expect(
+      getPool().query(`UPDATE public.api_keys SET mcp_only = true WHERE id = $1`, [approver!.id]),
+    ).rejects.toMatchObject({ code: '23514', constraint: 'api_keys_mcp_only_no_approve' })
+  })
+
+  it('treats a NULL-scope MCP-only key as holding no approve scope', async () => {
+    const { userId, companyId } = await seedOwner()
+    const { rows } = await getPool().query<{ mcp_only: boolean }>(
+      `INSERT INTO public.api_keys (user_id, company_id, key_hash, key_prefix, name, scopes, mcp_only)
+       VALUES ($1, $2, $3, 'gnubok_sk_mcponly', 'Legacy null scopes', NULL, true)
+       RETURNING mcp_only`,
+      [userId, companyId, sha256(randomUUID())],
+    )
+    expect(rows[0]!.mcp_only).toBe(true)
   })
 })

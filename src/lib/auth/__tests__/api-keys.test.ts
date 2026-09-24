@@ -248,8 +248,14 @@ describe('agent:write scope', () => {
 // ============================================================
 
 describe('validateApiKey', () => {
-  function setupMockRpc(response: { data: unknown; error: unknown }) {
-    const mockRpc = vi.fn().mockResolvedValue(response)
+  // Every row the migrated RPC returns carries an explicit mcp_only; a row
+  // without it is the fail-closed case and is only built on purpose (raw).
+  function setupMockRpc(response: { data: unknown; error: unknown }, opts: { raw?: boolean } = {}) {
+    const data =
+      !opts.raw && Array.isArray(response.data)
+        ? response.data.map((r: Record<string, unknown>) => ({ mcp_only: false, ...r }))
+        : response.data
+    const mockRpc = vi.fn().mockResolvedValue({ ...response, data })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     mockCreateClient.mockReturnValue({ rpc: mockRpc } as any)
   }
@@ -446,15 +452,21 @@ describe('validateApiKey', () => {
       }
     })
 
-    it('reads an absent column (database before the migration) as an ordinary key', async () => {
-      setupMockRpc({ data: [rpcRow('omit')], error: null })
-      const result = await validateApiKey('gnubok_sk_test-key-value')
-      expect(result).not.toHaveProperty('error')
+    it('fails closed on an absent column (RPC that predates the migration)', async () => {
+      // An upstream merge that re-creates the RPC without mcp_only, or a
+      // rolled-back database, must not silently reopen REST for MCP-only keys.
+      setupMockRpc({ data: [rpcRow('omit')], error: null }, { raw: true })
+      const rest = await validateApiKey('gnubok_sk_test-key-value')
+      expect(rest).toMatchObject({ status: 403, code: 'API_KEY_MCP_ONLY' })
+
+      setupMockRpc({ data: [rpcRow('omit')], error: null }, { raw: true })
+      const mcp = await validateApiKey('gnubok_sk_test-key-value', { surface: 'mcp' })
+      expect(mcp).not.toHaveProperty('error')
     })
 
     it('fails closed on a present but non-boolean value', async () => {
-      for (const raw of [null, 'true', 1]) {
-        setupMockRpc({ data: [rpcRow(raw)], error: null })
+      for (const raw of [null, undefined, 'true', 1, 0]) {
+        setupMockRpc({ data: [rpcRow(raw)], error: null }, { raw: true })
         const result = await validateApiKey('gnubok_sk_test-key-value')
         expect(result).toMatchObject({ status: 403, code: 'API_KEY_MCP_ONLY' })
       }
@@ -491,6 +503,7 @@ describe('validateApiKey', () => {
       scopes: ['transactions:read'],
       rate_limited: false,
       mode: 'live',
+      mcp_only: false,
     }
 
     it('binds the key to the user\'s company once one exists and heals the row', async () => {

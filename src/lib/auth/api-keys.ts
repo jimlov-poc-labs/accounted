@@ -165,15 +165,17 @@ export const API_KEY_MCP_ONLY_CODE = 'API_KEY_MCP_ONLY'
 /**
  * True unless the RPC row says, in so many words, `mcp_only: false`.
  *
- * Absent (a database that has not run 20260924120000 yet) reads as false:
- * no key can carry the flag before the column exists, and reading absence as
- * true would lock every key out of REST during the deploy window. Anything
- * present but not literally false (null, a string) reads as MCP-only: the
- * column is NOT NULL boolean, so such a value means something is wrong, and
- * the safe reading of "we cannot tell" is the narrower surface.
+ * Fail-closed in every direction, including a row with no `mcp_only` at all.
+ * That shape means the database's validate_and_increment_api_key predates
+ * 20260924120000 (an upstream merge that re-creates the function, or a
+ * database rolled back under newer code): reading it as "ordinary" would
+ * silently reopen REST for every MCP-only key. The price is deploy order:
+ * the migration must run BEFORE this code ships, otherwise every key is
+ * refused outside MCP until it does. Once the migration has run every row
+ * carries an explicit boolean (NOT NULL DEFAULT false), so ordinary keys read
+ * false and are unaffected.
  */
 function readMcpOnly(row: Record<string, unknown>): boolean {
-  if (!('mcp_only' in row) || row.mcp_only === undefined) return false
   return row.mcp_only !== false
 }
 

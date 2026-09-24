@@ -85,6 +85,22 @@ export const POST = withRouteContext(
       })
     }
 
+    // An MCP-only key exists to PROPOSE: its writes are staged for a person to
+    // approve. Holding pending_operations:approve would let it approve its own
+    // proposals, so the combination is refused outright, not merely warned
+    // about (acknowledge_sod does not apply). The api_keys CHECK
+    // api_keys_mcp_only_no_approve enforces the same in storage.
+    if (mcpOnly && scopes.includes('pending_operations:approve')) {
+      return errorResponseFromCode('VALIDATION_ERROR', log, {
+        requestId,
+        details: {
+          field: 'scopes',
+          reason: 'mcp_only_cannot_approve',
+          scope: 'pending_operations:approve',
+        },
+      })
+    }
+
     // Both live and test keys bind to the active company. A test key is
     // simulation-only (the v1 wrapper forces dry-run on every write) so it can
     // safely point at the real company without ever persisting anything.

@@ -121,10 +121,12 @@ function ScopeCard({
   scope,
   checked,
   onCheckedChange,
+  disabled = false,
 }: {
   scope: Scope
   checked: boolean
   onCheckedChange: (checked: boolean) => void
+  disabled?: boolean
 }) {
   const t = useTranslations('settings_api_keys')
   const label = t(scopeLabelKey(scope))
@@ -136,16 +138,19 @@ function ScopeCard({
   return (
     <label
       className={cn(
-        'flex min-h-[68px] cursor-pointer flex-col gap-1 rounded-lg border p-2 transition-colors',
-        checked
-          ? 'border-border bg-secondary'
-          : 'border-border hover:bg-secondary/60'
+        'flex min-h-[68px] flex-col gap-1 rounded-lg border p-2 transition-colors',
+        disabled
+          ? 'cursor-not-allowed border-border opacity-50'
+          : checked
+            ? 'cursor-pointer border-border bg-secondary'
+            : 'cursor-pointer border-border hover:bg-secondary/60'
       )}
     >
       <div className="flex items-center gap-2">
         <Checkbox
           checked={checked}
           onCheckedChange={onCheckedChange}
+          disabled={disabled}
           className="shrink-0"
         />
         <span className="flex-1 text-xs font-medium text-foreground">{verb}</span>
@@ -215,10 +220,11 @@ export function ApiKeysPanel() {
     })
   }
 
-  // Turning MCP-only on also drops pending_operations:approve: a proposal-only
-  // key that can approve its own proposals is the one combination the flag
-  // exists to rule out. Re-ticking approve is allowed and runs into the SoD
-  // confirm like any other stage+approve key.
+  // Turning MCP-only on drops pending_operations:approve and locks it: a
+  // proposal-only key that can approve its own proposals is the one
+  // combination the flag exists to rule out. It is impossible, not merely
+  // warned about: the route answers VALIDATION_ERROR (mcp_only_cannot_approve)
+  // and the api_keys_mcp_only_no_approve CHECK refuses it in storage.
   function toggleMcpOnly(checked: boolean) {
     setNewKeyMcpOnly(checked)
     if (checked) {
@@ -721,6 +727,7 @@ export function ApiKeysPanel() {
                           scope={scope}
                           checked={newKeyScopes.has(scope)}
                           onCheckedChange={(checked) => toggleScope(group, scope, checked)}
+                          disabled={newKeyMcpOnly && scope === 'pending_operations:approve'}
                         />
                       ))}
                     </div>

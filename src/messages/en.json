@@ -2945,7 +2945,7 @@
     "mode_test_help": "Test keys simulate every call (forced dry-run): you see exactly what would happen, but nothing is saved or sent.",
     "badge_test": "Test",
     "mcp_only_label": "MCP only",
-    "mcp_only_help": "The key only works against the MCP server, where every write is staged and waits for approval. The REST API and every other surface refuse it. Use it for an agent that should only propose.",
+    "mcp_only_help": "The key only works against the MCP server, where every write is staged and waits for approval. The REST API and every other surface refuse it, and it can never be given the approve permission. Use it for an agent that should only propose.",
     "mcp_only_badge": "MCP only",
     "revoke_dialog_title": "Revoke API key",
     "revoke_dialog_description": "\"{name}\" will be permanently revoked. Any clients using the key will stop working immediately.",
