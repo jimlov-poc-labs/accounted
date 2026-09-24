@@ -281,9 +281,66 @@ describe('POST /api/settings/api-keys', () => {
     expect(payload.p_client).toBeNull()
     expect(payload.p_refresh_token_hash).toBeNull()
     expect(payload.p_unattended_commit_limit).toBeNull()
+    // Not MCP-only unless asked for: existing integrations keep REST.
+    expect(payload.p_mcp_only).toBe(false)
     // The stored hash is what the RPC received, and the key it returned matches it.
     expect(typeof payload.p_key_hash).toBe('string')
     expect(body.data.key.startsWith(payload.p_key_prefix as string)).toBe(true)
+  })
+
+  it('passes p_mcp_only: true to the create when the body opts in', async () => {
+    setupCreate({
+      keyId: 'ak-4',
+      row: { ...storedRow, id: 'ak-4', scopes: ['bookkeeping:write', 'reports:read'], mcp_only: true },
+    })
+    const res = await POST(
+      createMockRequest('/api/settings/api-keys', {
+        method: 'POST',
+        body: { name: 'proposer', scopes: ['bookkeeping:write', 'reports:read'], mcp_only: true },
+      }),
+      noParams,
+    )
+    const { status, body } = await parseJsonResponse<{ data: { mcp_only: boolean } }>(res)
+    expect(status).toBe(200)
+    expect(body.data.mcp_only).toBe(true)
+    expect(createArgs().p_mcp_only).toBe(true)
+  })
+
+  it('treats a truthy non-boolean mcp_only as a normal key (strict opt-in)', async () => {
+    setupCreate()
+    await POST(
+      createMockRequest('/api/settings/api-keys', {
+        method: 'POST',
+        body: { name: 'x', scopes: ['reports:read'], mcp_only: 'yes' },
+      }),
+      noParams,
+    )
+    expect(createArgs().p_mcp_only).toBe(false)
+  })
+
+  it('refuses an MCP-only key with pending_operations:approve, even with acknowledge_sod', async () => {
+    setupFrom({ count: 0 })
+    for (const scopes of [
+      ['bookkeeping:write', 'pending_operations:approve'],
+      // Approve without any staging scope is still refused: the flag means
+      // the key cannot settle a pending operation at all.
+      ['reports:read', 'pending_operations:approve'],
+    ]) {
+      const res = await POST(
+        createMockRequest('/api/settings/api-keys', {
+          method: 'POST',
+          body: { name: 'self-approver', scopes, mcp_only: true, acknowledge_sod: true },
+        }),
+        noParams,
+      )
+      const { status, body } = await parseJsonResponse<{
+        error: { code: string; details: { field: string; reason: string } }
+      }>(res)
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(body.error.details).toMatchObject({ field: 'scopes', reason: 'mcp_only_cannot_approve' })
+    }
+    expect(serviceSupabase.rpc).not.toHaveBeenCalled()
   })
 
   it('creates a test key bound to the active company with mode=test', async () => {

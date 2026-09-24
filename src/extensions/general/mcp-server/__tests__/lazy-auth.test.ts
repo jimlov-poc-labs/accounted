@@ -281,7 +281,7 @@ describe('MCP lazy authentication', () => {
       rpc('tools/call', { name: 'gnubok_list_skills', arguments: {} }, { token: 'gnubok_sk_x' })
     )
     expect(response.status).toBe(200)
-    expect(mocks.validateApiKey).toHaveBeenCalledWith('gnubok_sk_x')
+    expect(mocks.validateApiKey).toHaveBeenCalledWith('gnubok_sk_x', { surface: 'mcp' })
     expect(mocks.checkRateLimit).not.toHaveBeenCalled()
   })
 

@@ -52,7 +52,7 @@ export const GET = withRouteContext(
     // active company too: they're simulation-only, so they never write real data.)
     const { data, error } = await supabase
       .from('api_keys')
-      .select('id, key_prefix, name, scopes, mode, rate_limit_rpm, unattended_commit_limit, last_used_at, revoked_at, created_at, client, user_id')
+      .select('id, key_prefix, name, scopes, mode, mcp_only, rate_limit_rpm, unattended_commit_limit, last_used_at, revoked_at, created_at, client, user_id')
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
 
@@ -131,6 +131,10 @@ export const POST = withRouteContext(
     let mode: ApiKeyMode = 'live'
     let requestedCompanyIds: string[] | undefined
     let requestedReadOnly: string[] | undefined
+    // MCP-only: the key authenticates on the MCP server (writes staged for
+    // approval) and is refused by REST and every other bearer surface
+    // (validateApiKey). Strictly `true` opts in; anything else is a normal key.
+    let mcpOnly = false
     try {
       const body = await request.json()
       if (body.name && typeof body.name === 'string') {
@@ -138,6 +142,7 @@ export const POST = withRouteContext(
       }
       acknowledgeSod = body.acknowledge_sod === true
       if (body.mode === 'test') mode = 'test'
+      mcpOnly = body.mcp_only === true
       const parsed = validateScopes(body.scopes)
       if (parsed) {
         scopes = parsed
@@ -179,6 +184,22 @@ export const POST = withRouteContext(
       return errorResponseFromCode('VALIDATION_ERROR', log, {
         requestId,
         details: { field: 'name', reason: 'reserved', reserved: OAUTH_MCP_KEY_NAME },
+      })
+    }
+
+    // An MCP-only key exists to PROPOSE: its writes are staged for a person to
+    // approve. Holding pending_operations:approve would let it approve its own
+    // proposals, so the combination is refused outright, not merely warned
+    // about (acknowledge_sod does not apply). The api_keys CHECK
+    // api_keys_mcp_only_no_approve enforces the same in storage.
+    if (mcpOnly && scopes.includes('pending_operations:approve')) {
+      return errorResponseFromCode('VALIDATION_ERROR', log, {
+        requestId,
+        details: {
+          field: 'scopes',
+          reason: 'mcp_only_cannot_approve',
+          scope: 'pending_operations:approve',
+        },
       })
     }
 
@@ -285,7 +306,7 @@ export const POST = withRouteContext(
 
     // The key row and its allowlist rows with their access levels (restricted
     // keys only) are written by one SECURITY DEFINER RPC in one transaction
-    // (migrations 20260928112722 and 20260928112724).
+    // (migrations 20260928112722 and 20260928112724; p_mcp_only: 20261005120000).
     // A key with no rows reaches every company, so a key insert that lands
     // without its allowlist would reach more than the caller selected, and a
     // compensating revoke is a second request that can itself fail. The RPC
@@ -309,6 +330,7 @@ export const POST = withRouteContext(
         p_unattended_commit_limit: null,
         p_company_ids: allowlist,
         p_read_only_company_ids: readOnly,
+        p_mcp_only: mcpOnly,
       },
     )
 
@@ -325,14 +347,14 @@ export const POST = withRouteContext(
     // and the response falls back to what the route already knows.
     const { data: storedKey, error: readError } = await serviceClient
       .from('api_keys')
-      .select('id, key_prefix, name, scopes, mode, created_at')
+      .select('id, key_prefix, name, scopes, mode, mcp_only, created_at')
       .eq('id', createdKeyId)
       .eq('user_id', user.id)
       .maybeSingle()
     if (readError || !storedKey) {
       log.error('api_key read-back after create failed', readError ?? { message: 'no row' })
     }
-    const data = storedKey ?? { id: createdKeyId, key_prefix: prefix, name, scopes, mode, created_at: null }
+    const data = storedKey ?? { id: createdKeyId, key_prefix: prefix, name, scopes, mode, mcp_only: mcpOnly, created_at: null }
 
     if (sodAcknowledgedAt) {
       // High-risk security event: the creator self-attested the stage+approve
@@ -344,6 +366,7 @@ export const POST = withRouteContext(
         keyPrefix: data.key_prefix,
         conflictingScope,
         scopes,
+        mcpOnly,
         acknowledgedBy: user.id,
         companyId: keyCompanyId,
       })

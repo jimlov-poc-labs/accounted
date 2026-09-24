@@ -157,6 +157,73 @@ describe('POST /api/v1/companies/:companyId/documents', () => {
     expect(uploadDocumentMock).not.toHaveBeenCalled()
   })
 
+  describe('documents:upload (upload without linking)', () => {
+    beforeEach(() => {
+      mockValidate.mockResolvedValue({
+        userId: 'user-1',
+        companyId: COMPANY_ID,
+        apiKeyId: 'ak_up',
+        apiKeyName: 'n8n upload',
+        scopes: ['documents:upload'],
+        mode: 'live',
+      })
+    })
+
+    it('stores an unlinked upload with only documents:upload', async () => {
+      uploadDocumentMock.mockResolvedValue(
+        makeDocumentAttachment({ id: 'doc-up', file_name: 'kvitto.pdf', journal_entry_id: null }),
+      )
+
+      const res = await POST(makeUpload({ file: pdf(), upload_source: 'api' }), params())
+      const body = await res.json()
+
+      expect(res.status).toBe(201)
+      expect(body.data.journal_entry_id).toBeNull()
+      const [, , , , metadata] = uploadDocumentMock.mock.calls[0]
+      expect(metadata).toMatchObject({ journal_entry_id: undefined, journal_entry_line_id: undefined })
+    })
+
+    it('refuses journal_entry_id with 403 INSUFFICIENT_SCOPE before anything is stored or looked up', async () => {
+      const supabase = makeFlexibleSupabase({ ...MEMBER, journal_entries: { data: { id: JE_ID }, error: null } })
+      mockServiceClient.mockReturnValue(supabase)
+
+      const res = await POST(makeUpload({ file: pdf(), journal_entry_id: JE_ID }), params())
+      const body = await res.json()
+
+      expect(res.status).toBe(403)
+      expect(body.error.code).toBe('INSUFFICIENT_SCOPE')
+      expect(body.error.details).toMatchObject({ required_scope: 'documents:write', field: 'journal_entry_id' })
+      expect(uploadDocumentMock).not.toHaveBeenCalled()
+      expect(supabase.from).not.toHaveBeenCalledWith('journal_entries')
+    })
+
+    it('refuses journal_entry_line_id on its own, and an empty link field', async () => {
+      const cases: Array<Record<string, string | File>> = [
+        { file: pdf(), journal_entry_line_id: JE_ID },
+        { file: pdf(), journal_entry_id: '' },
+      ]
+      for (const fields of cases) {
+        const res = await POST(makeUpload(fields), params())
+        expect(res.status).toBe(403)
+        expect((await res.json()).error.code).toBe('INSUFFICIENT_SCOPE')
+      }
+      expect(uploadDocumentMock).not.toHaveBeenCalled()
+    })
+
+    it('refuses a key without either documents scope', async () => {
+      mockValidate.mockResolvedValue({
+        userId: 'user-1',
+        companyId: COMPANY_ID,
+        scopes: ['documents:read'],
+        mode: 'live',
+      })
+      const res = await POST(makeUpload({ file: pdf() }), params())
+      expect(res.status).toBe(403)
+      expect((await res.json()).error.code).toBe('INSUFFICIENT_SCOPE')
+      expect(uploadDocumentMock).not.toHaveBeenCalled()
+    })
+  })
+
   it('stores the file, answers 201 with row fields only, and defers document.uploaded subscribers', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({ ...MEMBER, journal_entries: { data: { id: JE_ID }, error: null } }),

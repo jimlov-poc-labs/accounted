@@ -73,7 +73,7 @@ function parseRequestedScopes(scopeParam: string | null): ScopeParseResult {
   if (!scopeParam) return { kind: 'ok', scopes: undefined }
   const requested = scopeParam.split(/\s+/).filter((s) => s && !MARKER_SCOPES.has(s))
   if (requested.length === 0) return { kind: 'ok', scopes: undefined }
-  const valid = requested.filter((s): s is ApiKeyScope => s in API_KEY_SCOPES)
+  const valid = requested.filter((s): s is ApiKeyScope => Object.hasOwn(API_KEY_SCOPES, s))
   if (valid.length === 0) {
     return {
       kind: 'invalid_scope',

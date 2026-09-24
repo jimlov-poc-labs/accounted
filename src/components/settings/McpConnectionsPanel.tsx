@@ -284,6 +284,11 @@ export function McpConnectionsPanel({
                           {t('badge_test')}
                         </Badge>
                       )}
+                      {key.mcp_only && (
+                        <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[11px] font-normal">
+                          {t('mcp_only_badge')}
+                        </Badge>
+                      )}
                     </span>
                     <span className="hidden w-40 shrink-0 truncate text-xs text-muted-foreground md:block">
                       {kind === 'key' ? (
