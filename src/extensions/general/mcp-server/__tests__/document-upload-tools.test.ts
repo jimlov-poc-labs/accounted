@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { makeDocumentAttachment } from '@/tests/helpers'
-import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
+import { TOOL_SCOPE_MAP, hasScope } from '@/lib/auth/api-keys'
 import { MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
 import { receiptImage } from '@/tests/fixtures/receipt-images'
 
@@ -252,9 +252,16 @@ describe('MCP model-free document upload tools', () => {
       'gnubok_complete_document_upload',
       'gnubok_upload_document',
     ]) {
-      expect(TOOL_SCOPE_MAP[name]).toBe('transactions:write')
       expect(MCP_TOOL_CAPABILITY_MAP[name]).toBe('ai')
     }
+    // The two-step upload is open to upload-only keys; the legacy base64
+    // upload stays on transactions:write. Every key that can call the legacy
+    // path can call the two-step one too (transactions:write implies
+    // documents:upload), so no key loses an upload path.
+    expect(TOOL_SCOPE_MAP.gnubok_create_document_upload).toBe('documents:upload')
+    expect(TOOL_SCOPE_MAP.gnubok_complete_document_upload).toBe('documents:upload')
+    expect(TOOL_SCOPE_MAP.gnubok_upload_document).toBe('transactions:write')
+    expect(hasScope([TOOL_SCOPE_MAP.gnubok_upload_document], 'documents:upload')).toBe(true)
   })
 
   it('declares matched_supplier_id nullable: unmatched suppliers return null (MCP feedback seq 261972)', () => {

@@ -26,6 +26,7 @@ import {
   validateApiKey,
   createServiceClientNoCookies,
   hasScope,
+  effectiveScopes,
   RATE_LIMIT_RETRY_AFTER_SECONDS,
   TOOL_SCOPE_MAP,
   type ApiKeyMode,
@@ -4021,8 +4022,8 @@ export const tools: McpTool[] = [
       // of the contract: an explicitly-empty array means "no scopes granted",
       // which still hides scoped tools.
       const rawKeyScopes = (args as Record<string, unknown>).__keyScopes
-      const callerScopes: string[] = Array.isArray(rawKeyScopes)
-        ? (rawKeyScopes as string[])
+      const callerScopes: ApiKeyScope[] = Array.isArray(rawKeyScopes)
+        ? (rawKeyScopes as ApiKeyScope[])
         : []
       const scopesInjected = Array.isArray(rawKeyScopes)
 
@@ -4031,7 +4032,9 @@ export const tools: McpTool[] = [
         if (required) {
           // Scoped tool: visible only if scopes were injected AND the caller has it.
           if (!scopesInjected) return false
-          if (!callerScopes.includes(required)) return false
+          // hasScope, not includes: an implied scope (transactions:write →
+          // documents:upload) must surface the same tools the dispatcher lets it call.
+          if (!hasScope(callerScopes, required)) return false
         }
         if (scopeFilter && required !== scopeFilter) return false
         return true
@@ -5728,8 +5731,11 @@ export const tools: McpTool[] = [
       // uses); a missing marker fails closed to "no scopes granted", so a
       // direct execute() never vouches for a scoped tool on faith.
       const rawKeyScopes = (args as Record<string, unknown>).__keyScopes
-      const grantedScopes = new Set<string>(
-        Array.isArray(rawKeyScopes) ? (rawKeyScopes as string[]) : []
+      // Expanded with implied scopes so a loadout tool the dispatcher would let
+      // this key call (transactions:write → documents:upload) is not reported
+      // as blocked by scope.
+      const grantedScopes: ReadonlySet<string> = effectiveScopes(
+        Array.isArray(rawKeyScopes) ? (rawKeyScopes as ApiKeyScope[]) : []
       )
       const classifyRecommendedTool = (toolName: string): RecommendedToolClassification => {
         // Loadouts are validated against the registry at module init, so the

@@ -317,19 +317,42 @@ async function bindUnboundKey(
 }
 
 /**
- * Scopes that carry a narrower scope with them. documents:upload was carved
- * out of documents:write (upload without linking to a verifikat), so every
- * key minted before it existed keeps the upload it always had.
+ * Scopes that carry a narrower scope with them. Not transitive: an implied
+ * scope never implies anything further.
+ *
+ * documents:upload was carved out of documents:write (upload without linking
+ * to a verifikat), so every key minted before it existed keeps the upload it
+ * always had.
+ *
+ * transactions:write implies it too: the MCP upload tools
+ * (gnubok_create_document_upload / gnubok_complete_document_upload) required
+ * transactions:write before they moved to documents:upload, so keys and OAuth
+ * connectors holding it keep uploading. It does not carry documents:write, so
+ * linking at upload over REST still needs that scope.
  */
 const IMPLIED_SCOPES: Partial<Record<ApiKeyScope, readonly ApiKeyScope[]>> = {
   'documents:write': ['documents:upload'],
+  'transactions:write': ['documents:upload'],
 }
 
 /**
  * Check if a given scope is allowed by the key's scopes, directly or through
  * a broader scope that implies it (IMPLIED_SCOPES).
  */
-export function hasScope(keyScopes: ApiKeyScope[], required: ApiKeyScope): boolean {
+export function hasScope(keyScopes: readonly ApiKeyScope[], required: ApiKeyScope): boolean {
   if (keyScopes.includes(required)) return true
   return keyScopes.some((s) => IMPLIED_SCOPES[s]?.includes(required) ?? false)
+}
+
+/**
+ * The key's scopes plus every scope they imply (IMPLIED_SCOPES). For callers
+ * that need a set to test membership against instead of calling hasScope per
+ * scope; `effectiveScopes(k).has(s)` equals `hasScope(k, s)`.
+ */
+export function effectiveScopes(keyScopes: readonly ApiKeyScope[]): Set<ApiKeyScope> {
+  const out = new Set<ApiKeyScope>(keyScopes)
+  for (const s of keyScopes) {
+    for (const implied of IMPLIED_SCOPES[s] ?? []) out.add(implied)
+  }
+  return out
 }

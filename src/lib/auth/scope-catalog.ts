@@ -31,11 +31,12 @@ export const API_KEY_SCOPES = {
   'webhooks:manage':    { label: 'Webhooks: hantera',   description: 'Skapa, lista, uppdatera och radera webhook-prenumerationer' },
   'operations:read':    { label: 'Operationer: läs',    description: 'Hämta status för långkörande operationer (importer, bokslut, omvärdering)' },
   'documents:read':     { label: 'Dokument: läs',       description: 'Lista och hämta dokumentbilagor' },
-  // Upload only: POST /documents without journal_entry_id/line_id. The
+  // Upload only: POST /documents without journal_entry_id/line_id, and the MCP
+  // gnubok_create_document_upload / gnubok_complete_document_upload pair. The
   // document lands unlinked, is read and classified, and a receipt or invoice
   // is queued in Underlag for matching; nothing is attached to a verifikat.
-  // documents:write implies it (hasScope in api-keys.ts).
-  'documents:upload':   { label: 'Dokument: ladda upp', description: 'Lämna underlag via REST utan att koppla dem till verifikat; kvitton och fakturor hamnar i Underlag för matchning' },
+  // documents:write and transactions:write imply it (hasScope in api-keys.ts).
+  'documents:upload':   { label: 'Dokument: ladda upp', description: 'Lämna underlag (REST eller MCP-uppladdning) utan att koppla dem till verifikat; kvitton och fakturor hamnar i Underlag för matchning' },
   'documents:write':    { label: 'Dokument: skriv',     description: 'Ladda upp och koppla dokument till verifikationer' },
   'compliance:read':    { label: 'Compliance: läs',     description: 'Pre-flight-kontroller: momsstängning, bokslutsberedskap, voucher-gap, IB/UB-kontinuitet; Skatteverket-status (moms + AGI)' },
   'skatteverket:write': { label: 'Skatteverket: skriv', description: 'Lämna momsdeklaration och arbetsgivardeklaration (AGI) till Skatteverket (stagas; signeras med BankID)' },
@@ -310,8 +311,13 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Staged bulk retag of posted-line dimensions (dimensions PR6).
   gnubok_tag_journal_lines:               'bookkeeping:write',
   // Document inbox
-  gnubok_create_document_upload:          'transactions:write',
-  gnubok_complete_document_upload:        'transactions:write',
+  // The two-step upload only archives a document and queues it in Underlag
+  // (no verifikat, no link), so an upload-only key may call it.
+  // transactions:write implies documents:upload (IMPLIED_SCOPES in
+  // api-keys.ts), so keys that uploaded before keep doing so. The legacy
+  // base64 variant stays on transactions:write.
+  gnubok_create_document_upload:          'documents:upload',
+  gnubok_complete_document_upload:        'documents:upload',
   gnubok_upload_document:                 'transactions:write',
   gnubok_list_inbox_items:                'transactions:read',
   gnubok_get_inbox_item:                  'transactions:read',
