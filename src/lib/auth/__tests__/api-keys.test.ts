@@ -18,6 +18,7 @@ import {
   extractBearerToken,
   validateScopes,
   hasScope,
+  effectiveScopes,
   validateApiKey,
   findStageApproveConflict,
   DEFAULT_SCOPES,
@@ -25,6 +26,7 @@ import {
   STAGING_SCOPES,
   TOOL_SCOPE_MAP,
   API_KEY_SCOPES,
+  ALL_SCOPES,
 } from '../api-keys'
 import { createClient } from '@supabase/supabase-js'
 
@@ -182,6 +184,31 @@ describe('hasScope', () => {
   it('never lets documents:upload imply documents:write', () => {
     expect(hasScope(['documents:upload'], 'documents:write')).toBe(false)
     expect(hasScope(['documents:upload', 'documents:read'], 'documents:write')).toBe(false)
+  })
+
+  it('lets transactions:write imply documents:upload (the MCP upload tools required it before)', () => {
+    expect(hasScope(['transactions:write'], 'documents:upload')).toBe(true)
+  })
+
+  it('never lets transactions:write reach documents:write, and never lets documents:upload reach transactions:write', () => {
+    expect(hasScope(['transactions:write'], 'documents:write')).toBe(false)
+    expect(hasScope(['documents:upload'], 'transactions:write')).toBe(false)
+  })
+})
+
+describe('effectiveScopes', () => {
+  it('adds implied scopes and nothing transitive', () => {
+    expect([...effectiveScopes(['transactions:write'])].sort()).toEqual(['documents:upload', 'transactions:write'])
+    expect([...effectiveScopes(['documents:upload'])]).toEqual(['documents:upload'])
+    expect(effectiveScopes([]).size).toBe(0)
+  })
+
+  it('agrees with hasScope for every catalogue scope', () => {
+    const keyScopes = ['transactions:write', 'reports:read'] as const
+    const set = effectiveScopes([...keyScopes])
+    for (const scope of ALL_SCOPES) {
+      expect(set.has(scope), scope).toBe(hasScope([...keyScopes], scope))
+    }
   })
 })
 
