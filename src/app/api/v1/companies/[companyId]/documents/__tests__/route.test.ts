@@ -210,6 +210,27 @@ describe('POST /api/v1/companies/:companyId/documents', () => {
       expect(uploadDocumentMock).not.toHaveBeenCalled()
     })
 
+    it('lets a transactions:write key (implied documents:upload) upload unlinked, but not link', async () => {
+      mockValidate.mockResolvedValue({
+        userId: 'user-1',
+        companyId: COMPANY_ID,
+        scopes: ['transactions:write'],
+        mode: 'live',
+      })
+      uploadDocumentMock.mockResolvedValue(
+        makeDocumentAttachment({ id: 'doc-tx', file_name: 'kvitto.pdf', journal_entry_id: null }),
+      )
+
+      const unlinked = await POST(makeUpload({ file: pdf() }), params())
+      expect(unlinked.status).toBe(201)
+      expect(uploadDocumentMock).toHaveBeenCalledTimes(1)
+
+      const linked = await POST(makeUpload({ file: pdf(), journal_entry_id: JE_ID }), params())
+      expect(linked.status).toBe(403)
+      expect((await linked.json()).error.details).toMatchObject({ required_scope: 'documents:write', field: 'journal_entry_id' })
+      expect(uploadDocumentMock).toHaveBeenCalledTimes(1)
+    })
+
     it('refuses a key without either documents scope', async () => {
       mockValidate.mockResolvedValue({
         userId: 'user-1',
