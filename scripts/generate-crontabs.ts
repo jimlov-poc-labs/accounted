@@ -78,7 +78,10 @@ const CURL_PREFIX = 'curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_UR
  *    (20260311120000_sandbox_support.sql), so a self-hosted database has it.
  *    With no sandbox users it deletes 0 rows and returns 200.
  */
-export const EXCLUDED_PATHS: Readonly<Record<string, string>> = {}
+export const EXCLUDED_PATHS: Readonly<Record<string, string>> = {
+  '/api/extensions/whatsapp-inbox/retention/cron': 'whatsapp-inbox is not used in this self-hosted install',
+  '/api/extensions/whatsapp-inbox/sweep/cron': 'whatsapp-inbox is not used in this self-hosted install',
+}
 
 /**
  * Per-variant schedule overrides, path to cron expression. This is where a
