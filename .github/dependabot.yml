@@ -17,3 +17,36 @@ updates:
       # deliberate, verified change, never an automated PR.
       - dependency-name: "@anthropic-ai/bedrock-sdk"
         versions: [">=0.30.0"]
+
+  # Same security-updates-only posture for the remaining ecosystems.
+  - package-ecosystem: "npm"
+    directories:
+      - "/packages/accounted-cli"
+      - "/packages/accounted-mcp"
+      - "/packages/connect-contract"
+      - "/packages/gnubok-mcp"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "docker"
+    directory: "/docker"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+
+  - package-ecosystem: "docker-compose"
+    directory: "/tests/tool-pg"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7

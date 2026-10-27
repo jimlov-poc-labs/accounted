@@ -1,0 +1,66 @@
+# Beroende- och hemlighetsskanning (beslut 2026-10-27, backlog 2c82ec0c i Memaix jimlov).
+name: Säkerhet
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sakerhet-${{ github.ref }}
+  # Push-körningar skannar bara pushens commits och får därför inte avbrytas.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gitleaks:
+    name: Hemligheter (gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Skannar bara commits i pushen/PR:en. Licensnyckel behövs inte för personliga konton.
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+
+  npm-audit:
+    name: npm audit (${{ matrix.katalog }})
+    # Beroenden granskas på PR och på main, inte på varje gren-push.
+    if: github.event_name == 'pull_request' || github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - katalog: .
+            kand-skuld: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # kand-skuld: katalogen hade höga/kritiska sårbarheter när steget infördes.
+      # Steget syns som misslyckat men stoppar inte CI. Sätt false när skulden är betald.
+      - name: Höga och kritiska sårbarheter
+        continue-on-error: ${{ matrix.kand-skuld }}
+        working-directory: ${{ matrix.katalog }}
+        run: npm audit --package-lock-only --audit-level=high
+
+  dependency-review:
+    name: Beroendegranskning (PR)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
