@@ -3435,7 +3435,24 @@ export const PendingOperationsQuerySchema = z.object({
 
 export const PendingOperationsBulkSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(100),
-})
+  // What the approver saw, per operation (bulk-commit only; bulk-reject
+  // ignores it). Loosely typed on purpose: parseExpectation owns the
+  // validation so every approval path applies the identical rules.
+  expected: z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        expected_amount: z.unknown().optional(),
+        expected_type: z.unknown().optional(),
+        expected_updated_at: z.unknown().optional(),
+      }).strict()
+    )
+    .min(1)
+    .max(100)
+    .optional(),
+// Strict: a misspelled `expected` key must be a 400, not a silently stripped
+// field that turns a conditional approval into an unconditional one.
+}).strict()
 
 // Bulk reject: same id list plus the optional category/reason pair from the
 // single reject route. When provided they are applied to every rejected row.

@@ -362,3 +362,88 @@ describe('POST /api/pending-operations/bulk-commit', () => {
     expect(mockCommit).toHaveBeenCalledTimes(3)
   })
 })
+
+describe('POST /api/pending-operations/bulk-commit: expected (what the approver saw)', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
+    requireWriteMock.mockResolvedValue({ ok: true })
+  })
+
+  const post = (body: unknown) =>
+    POST(createMockRequest('/api/pending-operations/bulk-commit', { method: 'POST', body }), {} as never)
+
+  it('passes each item its own expectation to the commit', async () => {
+    enqueue({ data: [makeOp({ id: VALID_ID_1 }), makeOp({ id: VALID_ID_2 })] })
+    mockCommit.mockResolvedValue({ status: 'committed' })
+
+    const { status } = await parseJsonResponse(
+      await post({
+        ids: [VALID_ID_1, VALID_ID_2],
+        expected: [
+          { id: VALID_ID_1, expected_amount: -10 },
+          { id: VALID_ID_2, expected_type: 'categorize_transaction' },
+        ],
+      }),
+    )
+
+    expect(status).toBe(200)
+    expect(mockCommit.mock.calls[0][4]).toMatchObject({ expected: { amount: -10 } })
+    expect(mockCommit.mock.calls[1][4]).toMatchObject({ expected: { operationType: 'categorize_transaction' } })
+  })
+
+  it('reports an EXPECTATION_MISMATCH item as failed with only the differing fields', async () => {
+    enqueue({ data: [makeOp({ id: VALID_ID_1 })] })
+    mockCommit.mockResolvedValue({
+      status: 'failed',
+      code: 'EXPECTATION_MISMATCH',
+      http_status: 409,
+      mismatches: [{ field: 'expected_amount', expected: -10, actual: -11 }],
+    })
+
+    const { body } = await parseJsonResponse<{
+      data: { results: Array<{ status: string; code?: string; mismatches?: unknown[] }> }
+    }>(await post({ ids: [VALID_ID_1], expected: [{ id: VALID_ID_1, expected_amount: -10 }] }))
+
+    expect(body.data.results[0]).toMatchObject({
+      status: 'failed',
+      code: 'EXPECTATION_MISMATCH',
+      mismatches: [{ field: 'expected_amount', expected: -10, actual: -11 }],
+    })
+  })
+
+  it('an item without an entry is skipped, not committed, once expected is given', async () => {
+    enqueue({ data: [makeOp({ id: VALID_ID_1 }), makeOp({ id: VALID_ID_2 })] })
+    mockCommit.mockResolvedValue({ status: 'committed' })
+
+    const { body } = await parseJsonResponse<{ data: { results: Array<{ id: string; status: string }> } }>(
+      await post({ ids: [VALID_ID_1, VALID_ID_2], expected: [{ id: VALID_ID_1, expected_amount: -10 }] }),
+    )
+
+    expect(mockCommit).toHaveBeenCalledTimes(1)
+    expect(body.data.results.find((r) => r.id === VALID_ID_2)?.status).toBe('skipped')
+  })
+
+  it.each([
+    ['malformed value', { ids: [VALID_ID_1], expected: [{ id: VALID_ID_1, expected_amount: Number.NaN }] }],
+    ['string amount', { ids: [VALID_ID_1], expected: [{ id: VALID_ID_1, expected_amount: '5' }] }],
+    ['null amount', { ids: [VALID_ID_1], expected: [{ id: VALID_ID_1, expected_amount: null }] }],
+    ['entry without any expectation', { ids: [VALID_ID_1], expected: [{ id: VALID_ID_1 }] }],
+    ['entry for an id not in ids', { ids: [VALID_ID_1], expected: [{ id: VALID_ID_2, expected_amount: 1 }] }],
+    ['misspelled top-level key', { ids: [VALID_ID_1], expecteds: [{ id: VALID_ID_1, expected_amount: 1 }] }],
+    ['misspelled key inside an entry', { ids: [VALID_ID_1], expected: [{ id: VALID_ID_1, expected_amout: 1 }] }],
+    ['unknown key next to a valid one', { ids: [VALID_ID_1], expected: [{ id: VALID_ID_1, expected_amount: 1, expected_ammount: 2 }] }],
+    ['duplicate entry', { ids: [VALID_ID_1], expected: [{ id: VALID_ID_1, expected_amount: 1 }, { id: VALID_ID_1, expected_amount: 1 }] }],
+  ])('refuses the whole call and touches nothing: %s', async (_l, body) => {
+    const response = await post(body)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(400)
+    expect(mockCommit).not.toHaveBeenCalled()
+    expect(mockSupabase.from).not.toHaveBeenCalled()
+  })
+})

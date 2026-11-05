@@ -304,3 +304,105 @@ describe('POST /api/pending-operations/:id/commit', () => {
     })
   })
 })
+
+describe('POST /api/pending-operations/:id/commit: expected (what the approver saw)', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+  const routeParams = createMockRouteParams({ id: 'op-1' })
+  const UPDATED_AT = '2026-11-05T10:00:00.123456+00:00'
+  const op = (overrides: Record<string, unknown> = {}) => ({
+    id: 'op-1',
+    user_id: 'user-1',
+    company_id: 'company-1',
+    operation_type: 'categorize_transaction',
+    status: 'pending',
+    risk_level: 'low',
+    title: 't',
+    params: {},
+    preview_data: { amount: -1250 },
+    updated_at: UPDATED_AT,
+    ...overrides,
+  })
+  const post = (body: unknown) =>
+    POST(createMockRequest('/api/pending-operations/op-1/commit', { method: 'POST', body }), routeParams)
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+  })
+
+  it('409 EXPECTATION_MISMATCH with only the differing fields, and the claim never runs', async () => {
+    enqueue({ data: op() }) // fetch
+    enqueue({ data: op({ preview_data: { amount: -99999 } }) }) // live re-read
+
+    const { status, body } = await parseJsonResponse<{
+      code: string
+      details: { mismatches: unknown[] }
+    }>(await post({ expected_amount: -1250 }))
+
+    expect(status).toBe(409)
+    expect(body.code).toBe('EXPECTATION_MISMATCH')
+    expect(body.details.mismatches).toEqual([{ field: 'expected_amount', expected: -1250, actual: -99999 }])
+    expect(
+      mockSupabase.from.mock.calls.filter(([t]: [string]) => t === 'pending_operations'),
+    ).toHaveLength(2) // fetch + re-read only; no claim
+  })
+
+  it.each([
+    ['NaN-like string amount', { expected_amount: 'abc' }],
+    ['null amount', { expected_amount: null }],
+    ['empty type', { expected_type: '' }],
+    ['bad timestamp', { expected_updated_at: 'x' }],
+  ])('400 EXPECTATION_INVALID, nothing read or written: %s', async (_l, body) => {
+    const response = await post(body)
+    const parsed = await parseJsonResponse<{ code: string }>(response)
+
+    expect(parsed.status).toBe(400)
+    expect(parsed.body.code).toBe('EXPECTATION_INVALID')
+    expect(mockSupabase.from).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['misspelled expected_amount', { expected_amout: 1 }],
+    ['plural wrapper key', { expecteds: { amount: 1 } }],
+    ['camelCase key', { expectedAmount: 1 }],
+    ['any other unknown key', { foo: 1 }],
+    ['typo next to a valid key', { expected_type: 'categorize_transaction', expected_ammount: 1 }],
+  ])('400 EXPECTATION_INVALID on an unknown key, never silently dropped: %s', async (_l, body) => {
+    const parsed = await parseJsonResponse<{ code: string }>(await post(body))
+
+    expect(parsed.status).toBe(400)
+    expect(parsed.body.code).toBe('EXPECTATION_INVALID')
+    expect(mockSupabase.from).not.toHaveBeenCalled()
+  })
+
+  it('400 on a JSON array or scalar body', async () => {
+    for (const body of [[1], 5, 'x']) {
+      const parsed = await parseJsonResponse<{ code: string }>(await post(body))
+      expect(parsed.status).toBe(400)
+    }
+    expect(mockSupabase.from).not.toHaveBeenCalled()
+  })
+
+  it('400 on a body that is present but not JSON (never silently dropped)', async () => {
+    const request = new Request('http://localhost:3000/api/pending-operations/op-1/commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{not json',
+    })
+    const parsed = await parseJsonResponse<{ code: string }>(await POST(request, routeParams))
+
+    expect(parsed.status).toBe(400)
+    expect(parsed.body.code).toBe('EXPECTATION_INVALID')
+    expect(mockSupabase.from).not.toHaveBeenCalled()
+  })
+
+  it('an operation outside the active company is 404 (ownership unchanged)', async () => {
+    enqueue({ data: null, error: { message: 'not found' } })
+
+    const { status } = await parseJsonResponse(await post({ expected_amount: -1250 }))
+
+    expect(status).toBe(404)
+  })
+})
