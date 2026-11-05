@@ -434,6 +434,9 @@ describe('POST /api/pending-operations/bulk-commit: expected (what the approver 
     ['null amount', { ids: [VALID_ID_1], expected: [{ id: VALID_ID_1, expected_amount: null }] }],
     ['entry without any expectation', { ids: [VALID_ID_1], expected: [{ id: VALID_ID_1 }] }],
     ['entry for an id not in ids', { ids: [VALID_ID_1], expected: [{ id: VALID_ID_2, expected_amount: 1 }] }],
+    ['misspelled top-level key', { ids: [VALID_ID_1], expecteds: [{ id: VALID_ID_1, expected_amount: 1 }] }],
+    ['misspelled key inside an entry', { ids: [VALID_ID_1], expected: [{ id: VALID_ID_1, expected_amout: 1 }] }],
+    ['unknown key next to a valid one', { ids: [VALID_ID_1], expected: [{ id: VALID_ID_1, expected_amount: 1, expected_ammount: 2 }] }],
     ['duplicate entry', { ids: [VALID_ID_1], expected: [{ id: VALID_ID_1, expected_amount: 1 }, { id: VALID_ID_1, expected_amount: 1 }] }],
   ])('refuses the whole call and touches nothing: %s', async (_l, body) => {
     const response = await post(body)

@@ -4713,6 +4713,12 @@ function parseExpectedOperations(raw: unknown): Map<string, PendingOperationExpe
     if (out.has(id)) {
       throw expectationInvalid([{ field: `${at}.operation_id`, reason: 'duplicate entry' }])
     }
+    const strayKeys = Object.keys(record).filter(
+      (k) => !['operation_id', 'expected_amount', 'expected_type', 'expected_updated_at'].includes(k),
+    )
+    if (strayKeys.length > 0) {
+      throw expectationInvalid(strayKeys.map((k) => ({ field: `${at}.${k}`, reason: 'unknown key' })))
+    }
     const parsed = parseExpectation({
       expected_amount: record.expected_amount,
       expected_type: record.expected_type,
@@ -4790,6 +4796,18 @@ async function commitStagedOperation(params: {
         commit_method: commitMethod,
         channel: 'mcp',
         confirmed,
+        // Field names only, never the values the approver pinned.
+        conditional: expected !== undefined,
+        ...(expected
+          ? {
+              expected_fields: [
+                ...(expected.amount !== undefined ? ['expected_amount'] : []),
+                ...(expected.operationType !== undefined ? ['expected_type'] : []),
+                ...(expected.updatedAt !== undefined ? ['expected_updated_at'] : []),
+              ],
+            }
+          : {}),
+        ...(result.mismatches ? { mismatch_fields: result.mismatches.map((m) => m.field) } : {}),
         ...(operation.batch_id ? { batch_id: operation.batch_id } : {}),
       },
       actor: {
@@ -24419,23 +24437,23 @@ export const tools: McpTool[] = [
     name: 'gnubok_approve_pending_operation',
     keywords: ['godkänn', 'bekräfta'],
     title: 'Approve Pending Operation',
-    description: "Commit a staged pending_operation the user authorised; company_id follows it. risk_level=high needs confirmed=true (surface BFL 5 kap 5§ irreversibility first). batch_id: low/medium risk only. expected_* pins what the user saw.",
+    description: "Commit a staged pending_operation the user explicitly authorised; company_id follows it. risk_level=high needs confirmed=true (surface BFL 5 kap 5§ irreversibility first). batch_id: low/medium risk only. expected_* pins what the user saw.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         operation_id: { type: 'string', description: 'pending_operations UUID, or batch_id.' },
-        batch_id: { type: 'string', format: 'uuid', description: 'Approve a stage_across_companies batch (low/medium risk; high only listed).' },
+        batch_id: { type: 'string', format: 'uuid', description: 'Approve a stage_across_companies batch (low/medium risk).' },
         confirmed: {
           type: 'boolean',
-          description: 'Required when risk_level=high (create_voucher, correct_entry, reverse_entry, year-end, period lock/close): acknowledges the BFL/BFNAR irreversibility, as the web UI warning dialog does.',
+          description: 'Required when risk_level=high (create_voucher, correct_entry, reverse_entry, year-end, period lock/close): acknowledges BFL/BFNAR irreversibility, like the web UI dialog.',
         },
-        expected_amount: { type: 'number', description: 'Signed amount the user saw, exact.' },
-        expected_type: { type: 'string' },
-        expected_updated_at: { type: 'string', description: 'ISO 8601' },
+        expected_amount: { type: 'number', description: 'Amount user saw. Omitted = unconditional.' },
+        expected_type: { type: 'string', description: 'Type user saw.' },
+        expected_updated_at: { type: 'string', description: 'updated_at user saw, ISO 8601.' },
         expected_operations: {
           type: 'array',
-          description: 'Batch: [{operation_id, expected_*}]; unlisted skipped.',
+          description: 'Batch: [{operation_id, expected_*}].',
           items: { type: 'object' },
         },
       },
@@ -24471,6 +24489,13 @@ export const tools: McpTool[] = [
 
       // What the approver saw. Validated BEFORE anything is read or written; a
       // malformed condition refuses the call (fail closed), it is never ignored.
+      // A misspelled key (expected_amout, expecteds, ...) must refuse the call:
+      // ignoring it would approve unconditionally what the caller meant to pin.
+      const KNOWN_EXPECT_KEYS = new Set(['expected_amount', 'expected_type', 'expected_updated_at', 'expected_operations'])
+      const strayExpectKeys = Object.keys(args).filter((k) => /expect/i.test(k) && !KNOWN_EXPECT_KEYS.has(k))
+      if (strayExpectKeys.length > 0) {
+        throw expectationInvalid(strayExpectKeys.map((k) => ({ field: k, reason: 'unknown key' })))
+      }
       const parsedExpectation = parseExpectation({
         expected_amount: args.expected_amount,
         expected_type: args.expected_type,

@@ -43,6 +43,21 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         )
       }
       const b = body as Record<string, unknown>
+      // Only the three expected_* keys are meaningful in this body. Any other
+      // key is refused: a misspelling (expected_amout, expecteds) would
+      // otherwise be dropped and the approval would go through unconditionally.
+      const known = new Set(['expected_amount', 'expected_type', 'expected_updated_at'])
+      const unknown = Object.keys(b).filter((k) => !known.has(k))
+      if (unknown.length > 0) {
+        return NextResponse.json(
+          {
+            error: 'Ogiltigt villkor för godkännandet.',
+            code: EXPECTATION_INVALID,
+            details: { issues: unknown.map((field) => ({ field, reason: 'unknown key' })) },
+          },
+          { status: 400 }
+        )
+      }
       rawExpectation = {
         expected_amount: b.expected_amount,
         expected_type: b.expected_type,

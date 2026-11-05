@@ -363,6 +363,28 @@ describe('POST /api/pending-operations/:id/commit: expected (what the approver s
     expect(mockSupabase.from).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['misspelled expected_amount', { expected_amout: 1 }],
+    ['plural wrapper key', { expecteds: { amount: 1 } }],
+    ['camelCase key', { expectedAmount: 1 }],
+    ['any other unknown key', { foo: 1 }],
+    ['typo next to a valid key', { expected_type: 'categorize_transaction', expected_ammount: 1 }],
+  ])('400 EXPECTATION_INVALID on an unknown key, never silently dropped: %s', async (_l, body) => {
+    const parsed = await parseJsonResponse<{ code: string }>(await post(body))
+
+    expect(parsed.status).toBe(400)
+    expect(parsed.body.code).toBe('EXPECTATION_INVALID')
+    expect(mockSupabase.from).not.toHaveBeenCalled()
+  })
+
+  it('400 on a JSON array or scalar body', async () => {
+    for (const body of [[1], 5, 'x']) {
+      const parsed = await parseJsonResponse<{ code: string }>(await post(body))
+      expect(parsed.status).toBe(400)
+    }
+    expect(mockSupabase.from).not.toHaveBeenCalled()
+  })
+
   it('400 on a body that is present but not JSON (never silently dropped)', async () => {
     const request = new Request('http://localhost:3000/api/pending-operations/op-1/commit', {
       method: 'POST',

@@ -6,6 +6,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
+const historySpy = vi.fn()
+vi.mock('@/lib/processing-history/append', () => ({
+  appendProcessingHistory: (...a: unknown[]) => historySpy(...a),
+}))
+
 vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/entitlements/has-capability')>()
   return { ...actual, hasCapability: vi.fn().mockResolvedValue(true) }
@@ -101,6 +106,75 @@ describe('gnubok_approve_pending_operation: expected_*', () => {
       code: 'EXPECTATION_INVALID',
     })
     expect(calls).toHaveLength(0)
+  })
+
+  it.each([
+    ['expected_amout', { expected_amout: 1 }],
+    ['expecteds', { expecteds: { amount: 1 } }],
+    ['expectedAmount', { expectedAmount: 1 }],
+    ['EXPECTED_TYPE', { EXPECTED_TYPE: 'x' }],
+  ])('refuses a misspelled expectation key instead of approving unconditionally: %s', async (_l, extra) => {
+    const { supabase, calls } = createQueuedMockSupabase()
+
+    await expect(run({ operation_id: OP_ID, ...extra }, supabase)).rejects.toMatchObject({
+      code: 'EXPECTATION_INVALID',
+    })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('refuses a misspelled key inside an expected_operations entry', async () => {
+    const { supabase, calls } = createQueuedMockSupabase()
+    await expect(
+      run({ batch_id: '8c1f0000-0000-4000-8000-000000000001', expected_operations: [{ operation_id: OP_ID, expected_amout: 1 }] }, supabase),
+    ).rejects.toMatchObject({ code: 'EXPECTATION_INVALID' })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('refuses an unknown key next to valid ones inside an expected_operations entry', async () => {
+    const { supabase, calls } = createQueuedMockSupabase()
+    await expect(
+      run({ batch_id: '8c1f0000-0000-4000-8000-000000000001', expected_operations: [{ operation_id: OP_ID, expected_amount: 1, expected_ammount: 2 }] }, supabase),
+    ).rejects.toMatchObject({ code: 'EXPECTATION_INVALID' })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('does not trip on the harness-injected __ keys', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: row(), error: null })
+    enqueue({ data: null, error: null })
+    const result = await run({ operation_id: OP_ID, __keyScopes: ['pending_operations:approve'] }, supabase)
+    expect(result.error_code).toBe('CONFLICT')
+  })
+
+  it('audits that an approval was conditional, and that a mismatch was refused (field names only)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: row(), error: null })
+    enqueue({ data: row({ preview_data: { amount: -1 } }), error: null })
+
+    await run({ operation_id: OP_ID, expected_amount: -1250, expected_type: 'categorize_transaction' }, supabase)
+
+    const payload = historySpy.mock.calls[0][0].payload
+    expect(payload.conditional).toBe(true)
+    expect(payload.expected_fields).toEqual(['expected_amount', 'expected_type'])
+    expect(payload.mismatch_fields).toEqual(['expected_amount'])
+    expect(JSON.stringify(payload)).not.toContain('-1250')
+  })
+
+  it('an unconditional approval is audited as not conditional', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: row(), error: null })
+    enqueue({ data: null, error: null })
+    await run({ operation_id: OP_ID }, supabase)
+    expect(historySpy.mock.calls[0][0].payload.conditional).toBe(false)
+  })
+
+  it('describes every expected_* field and that omitting them means unconditional', () => {
+    const props = (approveTool.inputSchema as { properties: Record<string, { description?: string }> }).properties
+    for (const k of ['expected_amount', 'expected_type', 'expected_updated_at']) {
+      expect(props[k].description).toBeTruthy()
+    }
+    expect(approveTool.description).toMatch(/explicitly authorised/)
+    expect(JSON.stringify(approveTool.inputSchema)).toMatch(/omit/i)
   })
 
   it('matching expectations pass the check and proceed to the atomic claim', async () => {

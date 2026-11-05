@@ -18,7 +18,11 @@ export const EXPECTATION_MISMATCH = 'EXPECTATION_MISMATCH'
 export const EXPECTATION_INVALID = 'EXPECTATION_INVALID'
 
 export interface PendingOperationExpectation {
-  /** Signed amount the operation posts, in the operation's currency (SEK). */
+  /**
+   * Amount the operation posts, in the operation's currency (SEK), compared
+   * exactly as the preview stores it. Only some types store a signed amount,
+   * see AMOUNT_FIELDS: for the others the sign is always positive.
+   */
   amount?: number
   operationType?: string
   /** updated_at of the row as the approver saw it. */
@@ -43,9 +47,20 @@ export interface RawExpectation {
 }
 
 /**
- * Preview fields carrying the signed amount an operation posts. Mirrors the
- * priced operations in unattended-limit.ts but keeps the sign, because a flip
- * between income and expense is exactly what a pinned amount must catch.
+ * Preview fields carrying the amount an operation posts, read exactly as
+ * stored (the sign is not touched here).
+ *
+ * SIGNED, the sign is the bank direction (negative = money out), so an
+ * income/expense flip IS caught by expected_amount:
+ *   categorize_transaction (amount), link_transaction_journal_entry
+ *   (transaction_amount).
+ * Every other type below stores a debit total, a payment or a sum that is
+ * positive by construction (total_debit, total, payment_amount, ...). For
+ * those the magnitude is pinned but a flip between income and expense is NOT
+ * visible in the amount: the caller must pin expected_type (and, for a
+ * voucher, show the lines) instead. Not verified per type against prod data;
+ * the unsigned classification follows the field names and the unattended-limit
+ * note that they are absolute postings.
  */
 const AMOUNT_FIELDS: Readonly<Record<string, readonly string[]>> = {
   create_voucher: ['total_debit'],
@@ -83,7 +98,14 @@ export function operationAmount(operationType: string, previewData: unknown): nu
       raw = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>)[key] : undefined
     }
     if (raw === null || raw === undefined) continue
-    const parsed = typeof raw === 'number' ? raw : Number(raw)
+    // jsonb numerics can arrive as strings, but only a strict decimal is a
+    // number: Number('') is 0, Number(true) is 1, Number([5]) is 5.
+    const parsed =
+      typeof raw === 'number'
+        ? raw
+        : typeof raw === 'string' && /^-?\d+(\.\d+)?$/.test(raw.trim())
+          ? Number(raw)
+          : Number.NaN
     if (Number.isFinite(parsed)) return parsed
   }
   return null

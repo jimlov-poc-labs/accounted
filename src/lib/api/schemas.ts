@@ -3450,7 +3450,9 @@ export const PendingOperationsBulkSchema = z.object({
     .min(1)
     .max(100)
     .optional(),
-})
+// Strict: a misspelled `expected` key must be a 400, not a silently stripped
+// field that turns a conditional approval into an unconditional one.
+}).strict()
 
 // Bulk reject: same id list plus the optional category/reason pair from the
 // single reject route. When provided they are applied to every rejected row.

@@ -48,6 +48,15 @@ describe('operationAmount', () => {
     expect(operationAmount('categorize_transaction', { amount: -50 })).toBe(-50)
     expect(operationAmount('book_invoice', { journal_entry: { total_debit: '12.5' } })).toBe(12.5)
   })
+  it.each([['empty string', ''], ['blank string', '  '], ['true', true], ['empty array', []], ['array of one', [5]], ['hex string', '0x10'], ['exponent string', '1e3']])(
+    'is null for a non-numeric raw value, never coerced: %s',
+    (_l, raw) => {
+      expect(operationAmount('categorize_transaction', { amount: raw })).toBeNull()
+    },
+  )
+  it('accepts a strict numeric string', () => {
+    expect(operationAmount('categorize_transaction', { amount: '-12.50' })).toBe(-12.5)
+  })
   it('is null for types that post nothing or for broken previews', () => {
     expect(operationAmount('create_customer', { amount: 1 })).toBeNull()
     expect(operationAmount('categorize_transaction', null)).toBeNull()
@@ -72,5 +81,19 @@ describe('checkExpectation', () => {
   })
   it('a missing live updated_at never satisfies an updated_at condition', () => {
     expect(checkExpectation({ updatedAt: '2026-11-05T10:00:00Z' }, { ...row, updated_at: null })).toHaveLength(1)
+  })
+})
+
+describe('sign handling (documents what a pinned amount can and cannot catch)', () => {
+  const at = '2026-11-05T10:00:00Z'
+  it('catches an income/expense flip on a genuinely signed type', () => {
+    const row = { operation_type: 'categorize_transaction', preview_data: { amount: -500 }, updated_at: at }
+    expect(checkExpectation({ amount: 500 }, row)).toHaveLength(1)
+  })
+  it('does NOT catch a flip on a positive-amount type: total_debit is always positive, rely on expected_type', () => {
+    const row = { operation_type: 'create_voucher', preview_data: { total_debit: 500 }, updated_at: at }
+    // Same magnitude, different economic meaning: indistinguishable here.
+    expect(checkExpectation({ amount: 500 }, row)).toEqual([])
+    expect(checkExpectation({ amount: -500 }, row)).toHaveLength(1)
   })
 })
