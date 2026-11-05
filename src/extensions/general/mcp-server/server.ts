@@ -483,6 +483,11 @@ import type { SkattekontoLedgerTwin } from '@/types/skatteverket'
 import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
+import {
+  EXPECTATION_INVALID,
+  parseExpectation,
+  type PendingOperationExpectation,
+} from '@/lib/pending-operations/expectation'
 import { buildStagedInvoice, describeInvoiceBuildRefusal } from '@/lib/pending-operations/build-staged-invoice'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getUserCompanies } from '@/lib/company/context'
@@ -4677,6 +4682,53 @@ async function runInnerTool(params: {
   }
 }
 
+/** EXPECTATION_INVALID refusal naming each malformed expected_* field. */
+function expectationInvalid(issues: Array<{ field: string; reason: string }>): Error {
+  return codedRefusal(
+    EXPECTATION_INVALID,
+    `Invalid approval condition: ${issues.map((i) => `${i.field} ${i.reason}`).join('; ')}`,
+  )
+}
+
+/**
+ * expected_operations -> per-operation expectations. Every entry must name an
+ * operation, carry at least one valid expected_* field, and appear once;
+ * anything else refuses the whole call.
+ */
+function parseExpectedOperations(raw: unknown): Map<string, PendingOperationExpectation> {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 200) {
+    throw expectationInvalid([{ field: 'expected_operations', reason: 'must be a non-empty array (max 200)' }])
+  }
+  const out = new Map<string, PendingOperationExpectation>()
+  raw.forEach((entry, index) => {
+    const at = `expected_operations[${index}]`
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw expectationInvalid([{ field: at, reason: 'must be an object' }])
+    }
+    const record = entry as Record<string, unknown>
+    const id = record.operation_id
+    if (typeof id !== 'string' || id.trim() === '') {
+      throw expectationInvalid([{ field: `${at}.operation_id`, reason: 'must be a non-empty string' }])
+    }
+    if (out.has(id)) {
+      throw expectationInvalid([{ field: `${at}.operation_id`, reason: 'duplicate entry' }])
+    }
+    const parsed = parseExpectation({
+      expected_amount: record.expected_amount,
+      expected_type: record.expected_type,
+      expected_updated_at: record.expected_updated_at,
+    })
+    if (!parsed.ok) {
+      throw expectationInvalid(parsed.issues.map((i) => ({ field: `${at}.${i.field}`, reason: i.reason })))
+    }
+    if (!parsed.expectation) {
+      throw expectationInvalid([{ field: at, reason: 'needs at least one expected_* field' }])
+    }
+    out.set(id, parsed.expectation)
+  })
+  return out
+}
+
 /**
  * Commit one staged operation the way gnubok_approve_pending_operation always
  * has: api_key commit provenance, the actor's unattended ceiling, the user's
@@ -4691,8 +4743,9 @@ async function commitStagedOperation(params: {
   actor: ActorContext | undefined
   userEmail: string | undefined
   confirmed: boolean
+  expected?: PendingOperationExpectation
 }): Promise<Awaited<ReturnType<typeof commitPendingOperation>>> {
-  const { supabase, userId, companyId, operation, actor, userEmail, confirmed } = params
+  const { supabase, userId, companyId, operation, actor, userEmail, confirmed, expected } = params
   // commit_method provenance (agent_first_vision.md §8 P0-1): MCP approvals
   // are relayed through an agent credential: record that in the immutable
   // layer instead of claiming 'user_accept'. ALL MCP traffic authenticates
@@ -4717,6 +4770,7 @@ async function commitStagedOperation(params: {
         : {}),
     },
     ...(userEmail ? { userEmail } : {}),
+    ...(expected ? { expected } : {}),
   })
 
   // Audit the MCP-initiated approval. Failure must not break the user flow:
@@ -24365,16 +24419,24 @@ export const tools: McpTool[] = [
     name: 'gnubok_approve_pending_operation',
     keywords: ['godkänn', 'bekräfta'],
     title: 'Approve Pending Operation',
-    description: "Commit a staged pending_operation the user has explicitly authorised; company_id is not needed, it follows the operation. risk_level=high needs confirmed=true: surface the BFL 5 kap 5§ irreversibility first. batch_id approves a batch (low/medium risk).",
+    description: "Commit a staged pending_operation the user authorised; company_id follows it. risk_level=high needs confirmed=true (surface BFL 5 kap 5§ irreversibility first). batch_id: low/medium risk only. expected_* pins what the user saw.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        operation_id: { type: 'string', description: 'UUID of the pending_operations row to approve. Either this or batch_id.' },
-        batch_id: { type: 'string', format: 'uuid', description: 'Approve a whole gnubok_stage_across_companies batch (low/medium risk; high-risk members are only listed).' },
+        operation_id: { type: 'string', description: 'pending_operations UUID, or batch_id.' },
+        batch_id: { type: 'string', format: 'uuid', description: 'Approve a stage_across_companies batch (low/medium risk; high only listed).' },
         confirmed: {
           type: 'boolean',
-          description: 'Required when the operation has risk_level=high (create_voucher, correct_entry, reverse_entry, year-end, period lock/close). Acknowledges the BFL/BFNAR irreversibility implications. The web UI surfaces the same gate via an explicit warning dialog.',
+          description: 'Required when risk_level=high (create_voucher, correct_entry, reverse_entry, year-end, period lock/close): acknowledges the BFL/BFNAR irreversibility, as the web UI warning dialog does.',
+        },
+        expected_amount: { type: 'number', description: 'Signed amount the user saw, exact.' },
+        expected_type: { type: 'string' },
+        expected_updated_at: { type: 'string', description: 'ISO 8601' },
+        expected_operations: {
+          type: 'array',
+          description: 'Batch: [{operation_id, expected_*}]; unlisted skipped.',
+          items: { type: 'object' },
         },
       },
       required: [],
@@ -24407,6 +24469,29 @@ export const tools: McpTool[] = [
       if (!operationId && !batchId) throw new Error('operation_id or batch_id is required')
       if (operationId && batchId) throw new Error('Pass either operation_id or batch_id, not both')
 
+      // What the approver saw. Validated BEFORE anything is read or written; a
+      // malformed condition refuses the call (fail closed), it is never ignored.
+      const parsedExpectation = parseExpectation({
+        expected_amount: args.expected_amount,
+        expected_type: args.expected_type,
+        expected_updated_at: args.expected_updated_at,
+      })
+      if (!parsedExpectation.ok) throw expectationInvalid(parsedExpectation.issues)
+      const expectation = parsedExpectation.expectation
+      if (batchId && expectation) {
+        throw expectationInvalid([{
+          field: 'expected_*',
+          reason: 'not valid with batch_id: pass expected_operations with one entry per member',
+        }])
+      }
+      let expectedByOperation: Map<string, PendingOperationExpectation> | null = null
+      if (args.expected_operations !== undefined) {
+        if (!batchId) {
+          throw expectationInvalid([{ field: 'expected_operations', reason: 'only valid with batch_id' }])
+        }
+        expectedByOperation = parseExpectedOperations(args.expected_operations)
+      }
+
       // Resolve the user's email so commitPendingOperation can attribute the
       // journal_entries.committed_by_email and any user-facing email side
       // effects (send_invoice cc) to the actor: matches the web-UI commit
@@ -24433,6 +24518,16 @@ export const tools: McpTool[] = [
         if (batchError) throw new Error(`Failed to load batch: ${batchError.message}`)
         const batchOps = (members ?? []) as PendingOperation[]
         if (batchOps.length === 0) throw new Error('Batch not found or nothing left to approve')
+        if (expectedByOperation) {
+          const memberIds = new Set(batchOps.map((m) => m.id))
+          const strangers = [...expectedByOperation.keys()].filter((id) => !memberIds.has(id))
+          if (strangers.length > 0) {
+            throw expectationInvalid([{
+              field: 'expected_operations',
+              reason: `operation not in this batch (or no longer pending): ${strangers.slice(0, 3).join(', ')}`,
+            }])
+          }
+        }
 
         const results: Array<Record<string, unknown>> = []
         let committed = 0
@@ -24461,6 +24556,14 @@ export const tools: McpTool[] = [
               results.push({ ...row, status: 'skipped', reason: 'high_risk_requires_individual_approval' })
               continue
             }
+            const memberExpectation = expectedByOperation?.get(member.id)
+            // Conditions were given for this batch but not for this member:
+            // the approver did not vouch for it, so it is not committed.
+            if (expectedByOperation && !memberExpectation) {
+              skipped += 1
+              results.push({ ...row, status: 'skipped', reason: 'expectation_missing' })
+              continue
+            }
             const outcome = await commitStagedOperation({
               supabase,
               userId,
@@ -24469,12 +24572,14 @@ export const tools: McpTool[] = [
               actor,
               userEmail,
               confirmed: false,
+              ...(memberExpectation ? { expected: memberExpectation } : {}),
             })
             if (outcome.status === 'committed') committed += 1
             else failed += 1
             results.push({
               ...row,
               status: outcome.status,
+              ...(outcome.mismatches ? { mismatches: outcome.mismatches } : {}),
               ...(outcome.error ? { error: outcome.error } : {}),
               ...(outcome.code ? { error_code: outcome.code } : {}),
               ...(outcome.operation_status ? { operation_status: outcome.operation_status } : {}),
@@ -24539,11 +24644,13 @@ export const tools: McpTool[] = [
         actor,
         userEmail,
         confirmed: args.confirmed === true,
+        ...(expectation ? { expected: expectation } : {}),
       })
 
       return {
         status: result.status,
         operation_id: operationId,
+        ...(result.mismatches ? { mismatches: result.mismatches } : {}),
         ...(result.data ? { data: result.data } : {}),
         ...(result.error ? { error: result.error } : {}),
         ...(result.code ? { error_code: result.code } : {}),

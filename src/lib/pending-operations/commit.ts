@@ -253,6 +253,12 @@ import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
 import { isValidRevenueAccount } from '@/lib/articles/validate-revenue-account'
 import { z } from 'zod'
 import { operationForPendingType } from '@/lib/operations/registry'
+import {
+  EXPECTATION_MISMATCH,
+  checkExpectation,
+  type ExpectationMismatch,
+  type PendingOperationExpectation,
+} from './expectation'
 import type { AnyOperation } from '@/lib/operations/types'
 import type {
   Transaction,
@@ -294,6 +300,8 @@ export interface CommitResult {
   // callers that do not recognize the code fall back to `error`.
   code?: string
   account_numbers?: string[]
+  // Present with EXPECTATION_MISMATCH: only the fields that differ.
+  mismatches?: ExpectationMismatch[]
   // The two numbers UNATTENDED_COMMIT_LIMIT_EXCEEDED's remediation refers to,
   // in SEK. Present only on that code. Without them the agent knows it was
   // over the ceiling but not by how much, and cannot tell a human what to
@@ -335,6 +343,15 @@ export interface CommitOptions {
    * Omitted → NULL attribution, identical to pre-attribution behaviour.
    */
   actor?: CommitActor
+  /**
+   * What the approver saw. When present the live row is re-read (scoped to the
+   * company) and compared BEFORE any gate or the claim; a mismatch returns
+   * EXPECTATION_MISMATCH with the op still pending and writes nothing. The
+   * claim is then also conditional on the row's updated_at, so a change landing
+   * between the comparison and the claim loses the race instead of being
+   * approved unseen. Callers must have validated it with parseExpectation.
+   */
+  expected?: PendingOperationExpectation
 }
 
 // ensureFiscalPeriod moved to lib/transactions/categorize-core.ts (imported
@@ -7209,6 +7226,53 @@ async function commitPendingOperationInner(
     }
   }
 
+  // ── Approver's expectation (what they saw). Runs first: a row that differs
+  //    from what was approved must not be committed, whatever else would
+  //    pass, and must stay 'pending' (nothing written). The caller's snapshot
+  //    is NOT trusted: the row is re-read, company-scoped, so a change made
+  //    after the caller fetched it is still caught.
+  let claimUpdatedAt: string | null = null
+  if (opts.expected) {
+    const { data: live, error: liveError } = await supabase
+      .from('pending_operations')
+      .select('id, status, operation_type, preview_data, updated_at')
+      .eq('id', pendingOp.id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (liveError) {
+      log.error('Failed to re-read pending_operation for expectation check:', liveError)
+      return { status: 'failed', error: 'Failed to verify operation', http_status: 500 }
+    }
+    if (!live) {
+      return { status: 'failed', error: 'Pending operation not found', http_status: 404, code: 'NOT_FOUND' }
+    }
+    if (live.status !== 'pending') {
+      return {
+        status: 'failed',
+        error: 'Operation already claimed or resolved by another caller',
+        http_status: 409,
+        code: 'CONFLICT',
+      }
+    }
+    const mismatches = checkExpectation(opts.expected, live)
+    if (mismatches.length > 0) {
+      return {
+        status: 'failed',
+        error: getErrorEntry(EXPECTATION_MISMATCH)?.message_en ?? 'Operation no longer matches what was approved',
+        http_status: getErrorEntry(EXPECTATION_MISMATCH)?.httpStatus ?? 409,
+        code: EXPECTATION_MISMATCH,
+        operation_status: 'pending',
+        mismatches,
+      }
+    }
+    claimUpdatedAt = typeof live.updated_at === 'string' ? live.updated_at : null
+    // Fail closed: without a timestamp to pin the claim to, the check above
+    // cannot be tied to the row that is about to be committed.
+    if (claimUpdatedAt === null) {
+      return { status: 'failed', error: 'Failed to verify operation', http_status: 500 }
+    }
+  }
+
   // ── Capability gate (commit-time twin of the MCP dispatch gate). The actual
   //    external-service call (email / Skatteverket submit) happens below, so
   //    this is the true paid chokepoint: it also catches an op STAGED during
@@ -7271,13 +7335,15 @@ async function commitPendingOperationInner(
   //    must not run side-effects. Without this, both callers can pass the
   //    in-memory status check and double-book journal entries, send duplicate
   //    emails, etc.
-  const { data: claimed, error: claimError } = await supabase
+  let claimQuery = supabase
     .from('pending_operations')
     .update({ status: 'committing' })
     .eq('id', pendingOp.id)
     .eq('status', 'pending')
-    .select('id')
-    .maybeSingle()
+  // With an expectation the claim only succeeds on the exact row version that
+  // was compared (updated_at is bumped by trigger on every change).
+  if (claimUpdatedAt !== null) claimQuery = claimQuery.eq('updated_at', claimUpdatedAt)
+  const { data: claimed, error: claimError } = await claimQuery.select('id').maybeSingle()
 
   if (claimError) {
     log.error('Failed to claim pending_operation:', claimError)
@@ -7288,6 +7354,7 @@ async function commitPendingOperationInner(
       status: 'failed',
       error: 'Operation already claimed or resolved by another caller',
       http_status: 409,
+      code: 'CONFLICT',
     }
   }
 

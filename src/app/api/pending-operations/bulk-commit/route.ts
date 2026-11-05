@@ -4,6 +4,12 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { PendingOperationsBulkSchema } from '@/lib/api/schemas'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
+import {
+  EXPECTATION_INVALID,
+  EXPECTATION_MISMATCH,
+  parseExpectation,
+  type PendingOperationExpectation,
+} from '@/lib/pending-operations/expectation'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { PendingOperation } from '@/types'
 
@@ -13,6 +19,8 @@ interface BulkCommitItemResult {
   id: string
   status: 'committed' | 'failed' | 'skipped' | 'rejected'
   error?: string
+  code?: string
+  mismatches?: unknown[]
 }
 
 // Swedish display labels for already-handled operations; the raw enum values
@@ -29,7 +37,37 @@ export const POST = withRouteContext(
   async (request, { user, supabase, companyId, log }) => {
     const validated = await validateBody(request, PendingOperationsBulkSchema)
     if (!validated.success) return validated.response
-    const { ids } = validated.data
+    const { ids, expected } = validated.data
+
+    // Per-operation conditions (what the approver saw). Validated before any
+    // read or write: one malformed or stray entry refuses the whole call.
+    let expectedById: Map<string, PendingOperationExpectation> | null = null
+    if (expected) {
+      expectedById = new Map()
+      for (const [index, entry] of expected.entries()) {
+        const parsed = parseExpectation({
+          expected_amount: entry.expected_amount,
+          expected_type: entry.expected_type,
+          expected_updated_at: entry.expected_updated_at,
+        })
+        const issues = !parsed.ok
+          ? parsed.issues.map((i) => ({ field: `expected[${index}].${i.field}`, reason: i.reason }))
+          : !parsed.expectation
+            ? [{ field: `expected[${index}]`, reason: 'needs at least one expected_* field' }]
+            : !ids.includes(entry.id)
+              ? [{ field: `expected[${index}].id`, reason: 'not in ids' }]
+              : expectedById.has(entry.id)
+                ? [{ field: `expected[${index}].id`, reason: 'duplicate entry' }]
+                : []
+        if (issues.length > 0 || !parsed.ok || !parsed.expectation) {
+          return NextResponse.json(
+            { error: 'Ogiltigt villkor för godkännandet.', code: EXPECTATION_INVALID, details: { issues } },
+            { status: 400 }
+          )
+        }
+        expectedById.set(entry.id, parsed.expectation)
+      }
+    }
 
     const { data: ops, error: fetchError } = await supabase
       .from('pending_operations')
@@ -71,13 +109,34 @@ export const POST = withRouteContext(
         continue
       }
 
+      const itemExpectation = expectedById?.get(id)
+      // Conditions were given for this call but not for this item: the
+      // approver did not vouch for it, so it is not committed.
+      if (expectedById && !itemExpectation) {
+        results.push({
+          id,
+          status: 'skipped',
+          error: 'Saknar villkor för godkännandet (expected)',
+        })
+        continue
+      }
+
       const result = await commitPendingOperation(supabase, user.id, companyId, op, {
+        ...(itemExpectation ? { expected: itemExpectation } : {}),
         userEmail: user.email,
         commitMethod: 'bulk_accept',
         actor: { type: 'user', ...(user.email ? { label: user.email } : {}) },
       })
       if (result.status === 'committed') {
         results.push({ id, status: 'committed' })
+      } else if (result.code === EXPECTATION_MISMATCH) {
+        results.push({
+          id,
+          status: 'failed',
+          code: EXPECTATION_MISMATCH,
+          error: 'Förslaget stämmer inte längre med det som godkändes. Inget har bokförts.',
+          mismatches: result.mismatches ?? [],
+        })
       } else {
         // The executor's error strings mix Swedish user messages with raw
         // Supabase/Zod English: map to Swedish before they land in the

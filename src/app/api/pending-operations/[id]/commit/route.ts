@@ -2,16 +2,64 @@ import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
+import {
+  EXPECTATION_INVALID,
+  EXPECTATION_MISMATCH,
+  parseExpectation,
+  type RawExpectation,
+} from '@/lib/pending-operations/expectation'
 import { bookkeepingErrorResponse, AccountsNotInChartError, ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import type { PendingOperation } from '@/types'
 
 ensureInitialized()
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'pending_operation.commit',
-  async (_request, { supabase, user, companyId, log }, { params }) => {
+  async (request, { supabase, user, companyId, log }, { params }) => {
     const { id } = await params
+
+    // Optional body pinning what the approver saw (expected_amount,
+    // expected_type, expected_updated_at). An empty body is the unchanged
+    // legacy call; a body that is present but unreadable or malformed refuses
+    // the commit rather than silently dropping the condition.
+    let rawExpectation: RawExpectation = {}
+    const bodyText = await request.text()
+    if (bodyText.trim() !== '') {
+      let body: unknown
+      try {
+        body = JSON.parse(bodyText)
+      } catch {
+        return NextResponse.json(
+          { error: 'Ogiltigt villkor för godkännandet.', code: EXPECTATION_INVALID },
+          { status: 400 }
+        )
+      }
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        return NextResponse.json(
+          { error: 'Ogiltigt villkor för godkännandet.', code: EXPECTATION_INVALID },
+          { status: 400 }
+        )
+      }
+      const b = body as Record<string, unknown>
+      rawExpectation = {
+        expected_amount: b.expected_amount,
+        expected_type: b.expected_type,
+        expected_updated_at: b.expected_updated_at,
+      }
+    }
+    const parsedExpectation = parseExpectation(rawExpectation)
+    if (!parsedExpectation.ok) {
+      return NextResponse.json(
+        {
+          error: 'Ogiltigt villkor för godkännandet.',
+          code: EXPECTATION_INVALID,
+          details: { issues: parsedExpectation.issues },
+        },
+        { status: 400 }
+      )
+    }
 
     const { data: op, error: fetchError } = await supabase
       .from('pending_operations')
@@ -34,11 +82,22 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
           userEmail: user.email,
           commitMethod: 'user_accept',
           actor: { type: 'user', ...(user.email ? { label: user.email } : {}) },
+          ...(parsedExpectation.expectation ? { expected: parsedExpectation.expectation } : {}),
         }
       )
 
       if (result.status === 'committed') {
         return NextResponse.json({ data: result.data })
+      }
+      if (result.code === EXPECTATION_MISMATCH) {
+        return NextResponse.json(
+          {
+            error: getErrorEntry(EXPECTATION_MISMATCH)?.message_sv ?? 'Förslaget har ändrats.',
+            code: EXPECTATION_MISMATCH,
+            details: { mismatches: result.mismatches ?? [] },
+          },
+          { status: result.http_status ?? 409 }
+        )
       }
       // Recoverable accounts-not-in-chart: return the structured envelope (code +
       // account_numbers) so the client can offer activation and retry the still-

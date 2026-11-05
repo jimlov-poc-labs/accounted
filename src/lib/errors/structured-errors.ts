@@ -200,6 +200,29 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
         'Do not retry, and do not split the entry into smaller ones: one affärshändelse is one verifikat (BFL 5 kap. 6 §). Ask a human to approve the staged operation in Accounted, or have the key owner raise the limit in API key settings. details.attempted and details.limit carry the numbers.',
     },
   },
+  // The approver pinned what they saw (expected_amount / expected_type /
+  // expected_updated_at) and the staged row no longer matches. Refused before
+  // the claim: the operation stays pending and nothing was changed.
+  EXPECTATION_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Förslaget stämmer inte längre med det som godkändes. Inget har bokförts. Granska förslaget igen.',
+    message_en:
+      'The staged operation no longer matches what was approved. Nothing was committed and the operation is still pending.',
+    retryable: false,
+    remediation: {
+      description:
+        'Do not retry with the same expectation. Fetch the operation again (gnubok_list_pending_operations), show the current values to the approver and approve again with the values they saw. details.mismatches lists only the fields that differ.',
+    },
+  },
+  EXPECTATION_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'Villkoret för godkännandet är ogiltigt (expected_amount, expected_type eller expected_updated_at). Inget har bokförts.',
+    message_en:
+      'An expected_* condition is malformed. Nothing was committed. Fix the value or omit it.',
+    retryable: false,
+  },
   ACCOUNTS_NOT_IN_CHART: {
     httpStatus: 400,
     message_sv: 'Konton saknas i kontoplanen.',
